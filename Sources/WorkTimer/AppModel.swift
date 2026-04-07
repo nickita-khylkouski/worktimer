@@ -14,6 +14,12 @@ final class AppModel {
         case wordsPerMinute
         case characters
         case mouseDistance
+        case aiTotalTokens
+        case aiTokensPerSecond
+        case aiTokensToday
+        case diskRead
+        case diskWritten
+        case diskWear
         case iconOnly
 
         var title: String {
@@ -32,6 +38,18 @@ final class AppModel {
                 return "Chars"
             case .mouseDistance:
                 return "Mouse"
+            case .aiTotalTokens:
+                return "AI Total"
+            case .aiTokensPerSecond:
+                return "AI /s"
+            case .aiTokensToday:
+                return "AI Today"
+            case .diskRead:
+                return "Disk Read"
+            case .diskWritten:
+                return "Disk Write"
+            case .diskWear:
+                return "SSD Wear"
             case .iconOnly:
                 return "Icon"
             }
@@ -92,6 +110,10 @@ final class AppModel {
     private(set) var typingPermissionState: CapturePermissionState = .unknown
     private(set) var typingStoredSummary: TypingSummary = .zero
     private(set) var mouseStoredSummary: MouseSummary = .zero
+    private(set) var aiUsageSummary: AIUsageSummary = .zero
+    private(set) var aiUsageAvailable = false
+    private(set) var diskHealthSummary: DiskHealthSummary = .zero
+    private(set) var diskHealthAvailable = false
 
     let recoveryWindowManager = RecoveryWindowManager()
 
@@ -99,6 +121,8 @@ final class AppModel {
     private let calendar = Calendar.autoupdatingCurrent
     private let typingCaptureService = TypingCaptureService()
     private let mouseCaptureService = MouseCaptureService()
+    private let aiUsageMonitor = AIUsageMonitor()
+    private let diskHealthMonitor = DiskHealthMonitor()
     private let typingStore: TypingStore?
 
     private var tickerTask: Task<Void, Never>?
@@ -110,11 +134,14 @@ final class AppModel {
     private var activeTypingSession: ActiveTypingSession?
     private var activeMouseSession: ActiveMouseSession?
     private var lastTypingCaptureRetryAt: Date?
-    private var manualWorkedDurationAdjustment: TimeInterval = 0
+    private var lastAIUsageRefreshRequestAt = Date.distantPast
+    private var lastDiskHealthRefreshRequestAt = Date.distantPast
 
     private let typingIdleThreshold: TimeInterval = 5
     private let mouseIdleThreshold: TimeInterval = 2
     private let typingCaptureRetryInterval: TimeInterval = 5
+    private let aiUsageRefreshInterval: TimeInterval = 3
+    private let diskHealthRefreshInterval: TimeInterval = 60
 
     init(now: Date = .now, installsStatusItem: Bool = true, typingDatabaseURL: URL? = nil) {
         let typingStore = try? Self.makeTypingStore(enabled: installsStatusItem, databaseURL: typingDatabaseURL)
@@ -160,7 +187,7 @@ final class AppModel {
             }
             statusItemController.onRightClick = { [weak self, weak statusItemController] in
                 Task { @MainActor in
-                    self?.toggleControlPanel(relativeTo: statusItemController?.button)
+                    self?.openControlPanel(relativeTo: statusItemController?.button)
                 }
             }
         }
@@ -178,6 +205,30 @@ final class AppModel {
         mouseCaptureService.onSample = { [weak self] sample in
             Task { @MainActor in
                 self?.recordMouseMovement(sample, at: .now)
+            }
+        }
+        aiUsageMonitor.onAvailabilityChange = { [weak self] isAvailable in
+            Task { @MainActor in
+                self?.aiUsageAvailable = isAvailable
+                self?.refreshStatusItem()
+            }
+        }
+        aiUsageMonitor.onSummary = { [weak self] summary in
+            Task { @MainActor in
+                self?.aiUsageSummary = summary
+                self?.refreshStatusItem()
+            }
+        }
+        diskHealthMonitor.onAvailabilityChange = { [weak self] isAvailable in
+            Task { @MainActor in
+                self?.diskHealthAvailable = isAvailable
+                self?.refreshStatusItem()
+            }
+        }
+        diskHealthMonitor.onSummary = { [weak self] summary in
+            Task { @MainActor in
+                self?.diskHealthSummary = summary
+                self?.refreshStatusItem()
             }
         }
 
@@ -318,6 +369,18 @@ final class AppModel {
             return Self.formatCompactCount(typingSummary.characterCount)
         case .mouseDistance:
             return mouseDistanceText
+        case .aiTotalTokens:
+            return aiCombinedTokensText
+        case .aiTokensPerSecond:
+            return aiTokensPerSecondText
+        case .aiTokensToday:
+            return aiTodayTokensText
+        case .diskRead:
+            return diskReadText
+        case .diskWritten:
+            return diskWrittenText
+        case .diskWear:
+            return diskWearText
         case .iconOnly:
             return elapsedText
         }
@@ -474,6 +537,83 @@ final class AppModel {
         isMouseMoving ? "Moving" : "Still"
     }
 
+    var aiStatusLabel: String {
+        aiUsageAvailable ? "Live" : "Unavailable"
+    }
+
+    var aiCombinedTokensText: String {
+        guard aiUsageAvailable else { return "--" }
+        return Self.formatCompactInt64(aiUsageSummary.combined.tokens)
+    }
+
+    var aiTodayTokensText: String {
+        guard aiUsageAvailable else { return "--" }
+        return Self.formatCompactInt64(aiUsageSummary.combined.todayTokens)
+    }
+
+    var aiTokensPerSecondText: String {
+        guard aiUsageAvailable else { return "--" }
+        let displayRate: Double
+        if aiUsageSummary.lastMinuteAverageTokensPerSecond > 0 {
+            displayRate = aiUsageSummary.lastMinuteAverageTokensPerSecond
+        } else if aiUsageSummary.hasRecentSupersetSessionActivity,
+                  aiUsageSummary.lastFifteenMinutesAverageTokensPerSecond > 0 {
+            displayRate = aiUsageSummary.lastFifteenMinutesAverageTokensPerSecond
+        } else {
+            displayRate = aiUsageSummary.lastFiveMinutesAverageTokensPerSecond
+        }
+        return "\(Self.formatTokensPerSecond(displayRate))/s"
+    }
+
+    var aiCodexTokensText: String {
+        guard aiUsageAvailable else { return "--" }
+        return Self.formatCompactInt64(aiUsageSummary.codex.tokens)
+    }
+
+    var aiClaudeTokensText: String {
+        guard aiUsageAvailable else { return "--" }
+        return Self.formatCompactInt64(aiUsageSummary.claude.tokens)
+    }
+
+    var aiWatchedFilesText: String {
+        guard aiUsageAvailable else { return "--" }
+        return "\(aiUsageSummary.watchedCodexFiles + aiUsageSummary.watchedClaudeFiles)"
+    }
+
+    var diskStatusLabel: String {
+        diskHealthAvailable ? diskHealthSummary.smartStatus : "Unavailable"
+    }
+
+    var diskReadText: String {
+        guard diskHealthAvailable else { return "--" }
+        return diskHealthSummary.readText
+    }
+
+    var diskWrittenText: String {
+        guard diskHealthAvailable else { return "--" }
+        return diskHealthSummary.writtenText
+    }
+
+    var diskWearText: String {
+        guard diskHealthAvailable else { return "--" }
+        return diskHealthSummary.wearText
+    }
+
+    var diskHostReadCommandsText: String {
+        guard diskHealthAvailable else { return "--" }
+        return diskHealthSummary.hostReadCommandsText
+    }
+
+    var diskHostWriteCommandsText: String {
+        guard diskHealthAvailable else { return "--" }
+        return diskHealthSummary.hostWriteCommandsText
+    }
+
+    var diskPowerOnText: String {
+        guard diskHealthAvailable else { return "--" }
+        return diskHealthSummary.powerOnText
+    }
+
     var showIconOnly: Bool {
         get { menuBarDisplayMode == .iconOnly }
         set { menuBarDisplayMode = newValue ? .iconOnly : .elapsed }
@@ -512,6 +652,8 @@ final class AppModel {
         updateCurrentTime(.now)
         startTypingCapture()
         startMouseCapture()
+        aiUsageMonitor.start()
+        diskHealthMonitor.start()
 
         tickerTask = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -593,7 +735,16 @@ final class AppModel {
         rollDayIfNeeded(now: now)
         currentTime = now
         let targetDuration = max(0, duration)
-        manualWorkedDurationAdjustment = targetDuration - rawTrackedWorkTime(at: now)
+        sessionRunDurations = targetDuration > 0 ? [targetDuration] : []
+        longestRunDuration = targetDuration
+        accumulatedElapsed = targetDuration
+        if isRunning {
+            runningSince = now
+            pausedSince = nil
+        } else {
+            runningSince = nil
+            pausedSince = now
+        }
         persistHistory()
         persistSession()
         refreshStatusItem()
@@ -701,14 +852,17 @@ final class AppModel {
         }
     }
 
-    private func toggleControlPanel(relativeTo button: NSStatusBarButton?) {
-        refreshTypingCapture(promptIfNeeded: false, revealPanelOnFailure: false)
-        updateCurrentTime(.now)
-        _ = recoveryWindowManager.toggle(relativeTo: button)
-    }
-
     private func tick() async {
-        updateCurrentTime(.now)
+        let now = Date.now
+        updateCurrentTime(now)
+        if now.timeIntervalSince(lastAIUsageRefreshRequestAt) >= aiUsageRefreshInterval {
+            lastAIUsageRefreshRequestAt = now
+            aiUsageMonitor.tick()
+        }
+        if now.timeIntervalSince(lastDiskHealthRefreshRequestAt) >= diskHealthRefreshInterval {
+            lastDiskHealthRefreshRequestAt = now
+            diskHealthMonitor.tick()
+        }
     }
 
     private func updateCurrentTime(_ now: Date) {
@@ -752,10 +906,6 @@ final class AppModel {
     }
 
     private func cumulativeRunTime(at now: Date) -> TimeInterval {
-        max(0, rawTrackedWorkTime(at: now) + manualWorkedDurationAdjustment)
-    }
-
-    private func rawTrackedWorkTime(at now: Date) -> TimeInterval {
         let inFlightRun = isRunning ? currentRunDuration(at: now) : 0
         return sessionRunDurations.reduce(0, +) + inFlightRun
     }
@@ -806,7 +956,6 @@ final class AppModel {
         longestRunDuration = 0
         lastResetElapsed = nil
         accumulatedElapsed = 0
-        manualWorkedDurationAdjustment = 0
 
         if wasRunning {
             runningSince = newDayStart
@@ -1021,7 +1170,6 @@ final class AppModel {
             longestRunDuration: longestRunDuration,
             lastResetElapsed: lastResetElapsed,
             accumulatedElapsed: accumulatedElapsed,
-            manualWorkedDurationAdjustment: manualWorkedDurationAdjustment,
             runningSince: runningSince,
             pausedSince: pausedSince,
             currentDayStart: currentDayStart,
@@ -1152,7 +1300,6 @@ final class AppModel {
         longestRunDuration = session.longestRunDuration
         lastResetElapsed = session.lastResetElapsed
         accumulatedElapsed = session.accumulatedElapsed
-        manualWorkedDurationAdjustment = session.manualWorkedDurationAdjustment
         runningSince = session.runningSince
         pausedSince = session.pausedSince
         currentDayStart = session.currentDayStart
@@ -1234,6 +1381,41 @@ final class AppModel {
         }
     }
 
+    nonisolated static func formatCompactInt64(_ value: Int64) -> String {
+        let absValue = abs(Double(value))
+        if absValue >= 1_000_000_000 {
+            return String(format: "%.2fB", Double(value) / 1_000_000_000)
+        }
+        if absValue >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if absValue >= 1_000 {
+            return String(format: "%.1fK", Double(value) / 1_000)
+        }
+        return "\(value)"
+    }
+
+    nonisolated static func formatTokensPerSecond(_ value: Double) -> String {
+        let safeValue = max(0, value)
+        switch safeValue {
+        case 0..<0.1:
+            return String(format: "%.2f", safeValue)
+        case 0.1..<10:
+            return String(format: "%.1f", safeValue)
+        case 10..<1_000:
+            return "\(Int(safeValue.rounded()))"
+        case 1_000..<1_000_000:
+            let thousands = safeValue / 1_000
+            return String(format: thousands >= 10 ? "%.0fK" : "%.1fK", thousands)
+        case 1_000_000..<1_000_000_000:
+            let millions = safeValue / 1_000_000
+            return String(format: millions >= 10 ? "%.0fM" : "%.1fM", millions)
+        default:
+            let billions = safeValue / 1_000_000_000
+            return String(format: billions >= 10 ? "%.0fB" : "%.2fB", billions)
+        }
+    }
+
     private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .none
@@ -1263,7 +1445,6 @@ struct PersistedSession: Codable, Equatable {
     let longestRunDuration: TimeInterval
     let lastResetElapsed: TimeInterval?
     let accumulatedElapsed: TimeInterval
-    let manualWorkedDurationAdjustment: TimeInterval
     let runningSince: Date?
     let pausedSince: Date?
     let currentDayStart: Date

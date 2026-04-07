@@ -246,6 +246,15 @@ struct AppModelTests {
         }
     }
 
+    @Test
+    func aiRateFormattingKeepsLowValuesVisible() {
+        #expect(AppModel.formatTokensPerSecond(0.04) == "0.04")
+        #expect(AppModel.formatTokensPerSecond(0.3) == "0.3")
+        #expect(AppModel.formatTokensPerSecond(3.25) == "3.2")
+        #expect(AppModel.formatTokensPerSecond(57.8) == "58")
+        #expect(AppModel.formatTokensPerSecond(2_300) == "2.3K")
+    }
+
     private func withCleanDefaults(_ body: () -> Void) {
         clearDefaults()
         body()

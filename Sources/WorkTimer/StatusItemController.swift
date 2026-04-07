@@ -73,7 +73,7 @@ final class StatusItemController: NSObject {
         }
 
         switch event.type {
-        case .rightMouseUp:
+        case .rightMouseDown:
             cancelPendingLeftClick()
             onRightClick?()
         case .leftMouseUp:
@@ -123,7 +123,7 @@ final class StatusItemController: NSObject {
 
         button.target = self
         button.action = #selector(handleClick)
-        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.sendAction(on: [.leftMouseUp, .rightMouseDown])
     }
 
     private func textWidth(for text: String, font: NSFont) -> CGFloat {

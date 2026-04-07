@@ -92,7 +92,6 @@ struct TypingStoreTests {
             longestRunDuration: 42,
             lastResetElapsed: nil,
             accumulatedElapsed: 42,
-            manualWorkedDurationAdjustment: 18,
             runningSince: day,
             pausedSince: nil,
             currentDayStart: day,

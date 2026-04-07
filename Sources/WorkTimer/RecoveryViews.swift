@@ -3,7 +3,7 @@ import SwiftUI
 struct TimerPanelView: View {
     @Bindable var model: AppModel
     @State private var hourlyRateInput = ""
-    @State private var workedTimeInput = ""
+    @State private var workedTimeDigits = ""
     @FocusState private var hourlyRateFieldFocused: Bool
     @FocusState private var workedTimeFieldFocused: Bool
 
@@ -13,6 +13,8 @@ struct TimerPanelView: View {
                 headerCard
                 controlsRow
                 typingCard
+                aiCard
+                diskCard
                 payCard
                 historyCard
                 logCard
@@ -90,16 +92,10 @@ struct TimerPanelView: View {
                     .foregroundStyle(.white.opacity(0.56))
 
                 HStack(spacing: 8) {
-                    TextField("h:mm:ss", text: $workedTimeInput)
+                    TextField("h:mm:ss", text: workedTimeInput)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .focused($workedTimeFieldFocused)
-                        .onChange(of: workedTimeInput) { _, newValue in
-                            let sanitized = sanitizedWorkedTimeInput(newValue)
-                            if sanitized != newValue {
-                                workedTimeInput = sanitized
-                            }
-                        }
                         .onSubmit {
                             commitWorkedTimeInput()
                         }
@@ -117,6 +113,10 @@ struct TimerPanelView: View {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                Text("Type digits. The separators stay in place.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.42))
             }
         }
         .panelCard()
@@ -204,6 +204,66 @@ struct TimerPanelView: View {
         .panelCard()
     }
 
+    private var aiCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel("AI Usage")
+                Spacer()
+                Text(model.aiStatusLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(model.aiUsageAvailable ? .white : .white.opacity(0.56))
+            }
+
+            Text(
+                model.aiUsageAvailable
+                    ? "Live Codex and Claude usage pulled from local usage snapshots and session logs."
+                    : "AI usage is unavailable until WorkTimer can find the local usage-data snapshots and session folders."
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.56))
+
+            VStack(spacing: 8) {
+                StatRow(label: "Combined", value: model.aiCombinedTokensText)
+                StatRow(label: "Today", value: model.aiTodayTokensText)
+                StatRow(label: "Rate", value: model.aiTokensPerSecondText)
+                StatRow(label: "Codex", value: model.aiCodexTokensText)
+                StatRow(label: "Claude", value: model.aiClaudeTokensText)
+                StatRow(label: "Watched files", value: model.aiWatchedFilesText)
+            }
+        }
+        .panelCard()
+    }
+
+    private var diskCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel("Disk")
+                Spacer()
+                Text(model.diskStatusLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(model.diskHealthAvailable ? .white : .white.opacity(0.56))
+            }
+
+            Text(
+                model.diskHealthAvailable
+                    ? "Internal SSD counters from diskutil SMART fields."
+                    : "Disk counters are unavailable on this Mac right now."
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.56))
+
+            VStack(spacing: 8) {
+                StatRow(label: "Read", value: model.diskReadText)
+                StatRow(label: "Written", value: model.diskWrittenText)
+                StatRow(label: "Read cmds", value: model.diskHostReadCommandsText)
+                StatRow(label: "Write cmds", value: model.diskHostWriteCommandsText)
+                StatRow(label: "Wear", value: model.diskWearText)
+                StatRow(label: "Power on", value: model.diskPowerOnText)
+            }
+        }
+        .panelCard()
+    }
+
     private var typingCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -282,7 +342,7 @@ struct TimerPanelView: View {
     }
 
     private func syncWorkedTimeInput() {
-        workedTimeInput = model.cumulativeRunText
+        workedTimeDigits = digitsForWorkedTime(model.cumulativeRunTime)
     }
 
     private func commitHourlyRateInput() {
@@ -293,7 +353,7 @@ struct TimerPanelView: View {
     }
 
     private func commitWorkedTimeInput() {
-        guard let parsedValue = parseWorkedTimeInput(workedTimeInput) else {
+        guard let parsedValue = parseWorkedTimeDigits(workedTimeDigits) else {
             syncWorkedTimeInput()
             return
         }
@@ -320,37 +380,66 @@ struct TimerPanelView: View {
         return result
     }
 
-    private func sanitizedWorkedTimeInput(_ raw: String) -> String {
-        raw.filter { $0.isNumber || $0 == ":" }
+    private var workedTimeInput: Binding<String> {
+        Binding(
+            get: { formatWorkedTimeDigits(workedTimeDigits) },
+            set: { newValue in
+                workedTimeDigits = sanitizedWorkedTimeDigits(newValue)
+            }
+        )
     }
 
-    private func parseWorkedTimeInput(_ raw: String) -> TimeInterval? {
-        let cleaned = sanitizedWorkedTimeInput(raw)
+    private func sanitizedWorkedTimeDigits(_ raw: String) -> String {
+        String(raw.filter(\.isNumber).suffix(9))
+    }
+
+    private func parseWorkedTimeDigits(_ digits: String) -> TimeInterval? {
+        let cleaned = sanitizedWorkedTimeDigits(digits)
         guard !cleaned.isEmpty else {
             return 0
         }
 
-        let components = cleaned.split(separator: ":").map(String.init)
-        guard components.count <= 3 else {
-            return nil
-        }
-        guard components.allSatisfy({ Int($0) != nil }) else {
+        let padded = cleaned.count >= 6
+            ? cleaned
+            : String(repeating: "0", count: 6 - cleaned.count) + cleaned
+
+        let secondsDigits = String(padded.suffix(2))
+        let minutesDigits = String(padded.dropLast(2).suffix(2))
+        let hoursDigits = String(padded.dropLast(4))
+
+        guard let hours = Int(hoursDigits),
+              let minutes = Int(minutesDigits),
+              let seconds = Int(secondsDigits)
+        else {
             return nil
         }
 
-        if components.count == 1 {
-            return TimeInterval((Int(components[0]) ?? 0) * 60)
+        return TimeInterval((hours * 3600) + (minutes * 60) + seconds)
+    }
+
+    private func formatWorkedTimeDigits(_ digits: String) -> String {
+        let cleaned = sanitizedWorkedTimeDigits(digits)
+        guard !cleaned.isEmpty else {
+            return "0:00:00"
         }
 
-        let values = components.compactMap(Int.init)
-        switch values.count {
-        case 2:
-            return TimeInterval((values[0] * 60) + values[1])
-        case 3:
-            return TimeInterval((values[0] * 3600) + (values[1] * 60) + values[2])
-        default:
-            return nil
-        }
+        let padded = cleaned.count >= 6
+            ? cleaned
+            : String(repeating: "0", count: 6 - cleaned.count) + cleaned
+
+        let secondsDigits = String(padded.suffix(2))
+        let minutesDigits = String(padded.dropLast(2).suffix(2))
+        let hoursDigits = String(padded.dropLast(4))
+        let normalizedHours = String(Int(hoursDigits) ?? 0)
+        return "\(normalizedHours):\(minutesDigits):\(secondsDigits)"
+    }
+
+    private func digitsForWorkedTime(_ interval: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(interval.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        return "\(hours)\(String(format: "%02d%02d", minutes, seconds))"
     }
 
     private static let moneyFormatter: NumberFormatter = {
