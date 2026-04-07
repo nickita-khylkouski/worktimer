@@ -137,6 +137,31 @@ struct AppModelTests {
     }
 
     @Test
+    func editedWorkedTimePersistsAcrossRelaunch() {
+        withCleanDefaults {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+            let databaseURL = root.appendingPathComponent("worktimer.sqlite")
+            let start = Date(timeIntervalSince1970: 5_500)
+            let firstLaunch = AppModel(now: start, installsStatusItem: false, typingDatabaseURL: databaseURL)
+
+            firstLaunch.advance(to: start.addingTimeInterval(30))
+            firstLaunch.setWorkedDuration(3_600, at: start.addingTimeInterval(30))
+
+            #expect(firstLaunch.cumulativeRunText == "1:00:00")
+
+            let relaunched = AppModel(
+                now: start.addingTimeInterval(45),
+                installsStatusItem: false,
+                typingDatabaseURL: databaseURL
+            )
+
+            #expect(relaunched.cumulativeRunText == "1:00:15")
+            #expect(relaunched.currentEarningsText == "$0.00")
+        }
+    }
+
+    @Test
     func typingStatsKeepShortPausesInsideOneSessionAndStopAfterIdle() {
         withCleanDefaults {
             let root = FileManager.default.temporaryDirectory

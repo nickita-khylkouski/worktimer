@@ -44,29 +44,6 @@ final class AppModel {
         static let dayHistory = "dayHistory"
     }
 
-    private struct PersistedSession: Codable {
-        let isRunning: Bool
-        let logEntries: [TimerLogEntry]
-        let pauseCount: Int
-        let resumeCount: Int
-        let resetCount: Int
-        let launchedAt: Date
-        let currentTime: Date
-        let sessionRunDurations: [TimeInterval]
-        let totalPausedDuration: TimeInterval
-        let longestRunDuration: TimeInterval
-        let lastResetElapsed: TimeInterval?
-        let accumulatedElapsed: TimeInterval
-        let runningSince: Date?
-        let pausedSince: Date?
-        let currentDayStart: Date
-        let mouseStoredDuration: TimeInterval?
-        let mouseStoredDistance: Double?
-        let activeMouseStartedAt: Date?
-        let activeMouseLastMovedAt: Date?
-        let activeMouseDistance: Double?
-    }
-
     private struct ActiveTypingSession {
         let startedAt: Date
         let context: CaptureContext
@@ -82,7 +59,7 @@ final class AppModel {
 
     var menuBarDisplayMode: MenuBarDisplayMode {
         didSet {
-            UserDefaults.standard.set(menuBarDisplayMode.rawValue, forKey: DefaultsKey.menuBarDisplayMode)
+            persistSettings()
             refreshStatusItem()
         }
     }
@@ -94,7 +71,7 @@ final class AppModel {
                 return
             }
 
-            UserDefaults.standard.set(hourlyRate, forKey: DefaultsKey.hourlyRate)
+            persistSettings()
             refreshStatusItem()
             persistHistory()
         }
@@ -132,23 +109,30 @@ final class AppModel {
     private var currentDayStart: Date
     private var activeTypingSession: ActiveTypingSession?
     private var activeMouseSession: ActiveMouseSession?
+    private var lastTypingCaptureRetryAt: Date?
+    private var manualWorkedDurationAdjustment: TimeInterval = 0
 
     private let typingIdleThreshold: TimeInterval = 5
     private let mouseIdleThreshold: TimeInterval = 2
+    private let typingCaptureRetryInterval: TimeInterval = 5
 
     init(now: Date = .now, installsStatusItem: Bool = true, typingDatabaseURL: URL? = nil) {
-        let storedMode = UserDefaults.standard.string(forKey: DefaultsKey.menuBarDisplayMode)
+        let typingStore = try? Self.makeTypingStore(enabled: installsStatusItem, databaseURL: typingDatabaseURL)
+        let storedMode = (try? typingStore?.stringSetting(for: DefaultsKey.menuBarDisplayMode))
+            ?? UserDefaults.standard.string(forKey: DefaultsKey.menuBarDisplayMode)
+        let storedHourlyRate = (try? typingStore?.doubleSetting(for: DefaultsKey.hourlyRate))
+            ?? UserDefaults.standard.double(forKey: DefaultsKey.hourlyRate)
+        let storedHistory = (try? typingStore?.loadDailySummaries()) ?? nil
         let initialMode = MenuBarDisplayMode(rawValue: storedMode ?? "") ?? .elapsed
         let initialDayStart = Calendar.autoupdatingCurrent.startOfDay(for: now)
         let statusItemController = installsStatusItem ? StatusItemController() : nil
-        let typingStore = try? Self.makeTypingStore(enabled: installsStatusItem, databaseURL: typingDatabaseURL)
 
         self.menuBarDisplayMode = initialMode
-        self.hourlyRate = max(0, UserDefaults.standard.double(forKey: DefaultsKey.hourlyRate))
+        self.hourlyRate = max(0, storedHourlyRate)
         self.isRunning = true
         self.launchedAt = initialDayStart
         self.currentTime = now
-        self.dayHistory = Self.loadHistory()
+        self.dayHistory = (storedHistory?.isEmpty == false) ? (storedHistory ?? []) : Self.loadLegacyHistory()
         self.currentDayStart = initialDayStart
         self.runningSince = now
         self.statusItemController = statusItemController
@@ -158,7 +142,7 @@ final class AppModel {
             self.typingPermissionState = .ready
         }
 
-        if let session = Self.loadPersistedSession() {
+        if let session = (try? typingStore?.loadSession()) ?? Self.loadLegacySession() {
             restore(from: session, now: now)
         }
         DebugTrace.log("AppModel init installsStatusItem=\(installsStatusItem) mode=\(initialMode.rawValue)")
@@ -199,6 +183,8 @@ final class AppModel {
 
         rollDayIfNeeded(now: now)
         currentTime = now
+        persistSettings()
+        persistHistory()
         persistSession()
     }
 
@@ -384,17 +370,21 @@ final class AppModel {
     }
 
     var typingStatusDetail: String {
+        if !isInstalledInApplications {
+            return "Move WorkTimer.app into Applications before granting permissions. Running from Downloads or a translocated path can break permission persistence."
+        }
+
         switch typingPermissionState {
         case .unknown:
             return "Preparing keyboard monitoring."
         case .ready:
             return "Typing time keeps short pauses under 5 seconds inside the same session."
         case .missingAccessibility:
-            return "Enable Accessibility for WorkTimer in System Settings."
+            return "Enable Accessibility for WorkTimer, then reopen the app once."
         case .missingInputMonitoring:
-            return "Enable Input Monitoring for WorkTimer in System Settings."
+            return "Enable Input Monitoring for WorkTimer, then reopen the app once."
         case .failedToInstallTap:
-            return "WorkTimer could not install the keyboard listener."
+            return "WorkTimer could not install the keyboard listener. Reopen after turning on both privacy switches."
         }
     }
 
@@ -405,6 +395,11 @@ final class AppModel {
         case .unknown, .missingAccessibility, .missingInputMonitoring, .failedToInstallTap:
             return true
         }
+    }
+
+    var isInstalledInApplications: Bool {
+        let path = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        return path.hasPrefix("/Applications/") || path.hasPrefix(NSHomeDirectory() + "/Applications/")
     }
 
     var typingSummary: TypingSummary {
@@ -594,6 +589,16 @@ final class AppModel {
         pasteboard.setString(summaryText, forType: .string)
     }
 
+    func setWorkedDuration(_ duration: TimeInterval, at now: Date = .now) {
+        rollDayIfNeeded(now: now)
+        currentTime = now
+        let targetDuration = max(0, duration)
+        manualWorkedDurationAdjustment = targetDuration - rawTrackedWorkTime(at: now)
+        persistHistory()
+        persistSession()
+        refreshStatusItem()
+    }
+
     func openControlPanel(relativeTo button: NSStatusBarButton? = nil) {
         refreshTypingCapture(promptIfNeeded: false, revealPanelOnFailure: false)
         updateCurrentTime(.now)
@@ -610,6 +615,18 @@ final class AppModel {
 
     func requestTypingPermissions() {
         refreshTypingCapture(promptIfNeeded: true, revealPanelOnFailure: true)
+        openTypingPermissionPanes()
+    }
+
+    func openTypingPermissionPanes() {
+        let accessibilityURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        let inputMonitoringURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
+        NSWorkspace.shared.open(accessibilityURL)
+        NSWorkspace.shared.open(inputMonitoringURL)
+    }
+
+    func openApplicationsFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
     }
 
     func openSystemSettings() {
@@ -697,10 +714,27 @@ final class AppModel {
     private func updateCurrentTime(_ now: Date) {
         rollDayIfNeeded(now: now)
         currentTime = now
+        retryTypingCaptureIfNeeded(at: now)
         finalizeTypingIfIdle(at: now)
         finalizeMouseIfIdle(at: now)
         refreshStatusItem()
         persistSession()
+    }
+
+    private func retryTypingCaptureIfNeeded(at now: Date) {
+        guard typingPermissionState != .ready else {
+            lastTypingCaptureRetryAt = nil
+            return
+        }
+
+        if let lastTypingCaptureRetryAt,
+           now.timeIntervalSince(lastTypingCaptureRetryAt) < typingCaptureRetryInterval
+        {
+            return
+        }
+
+        lastTypingCaptureRetryAt = now
+        refreshTypingCapture(promptIfNeeded: false, revealPanelOnFailure: false)
     }
 
     private func currentRunDuration(at now: Date) -> TimeInterval {
@@ -718,6 +752,10 @@ final class AppModel {
     }
 
     private func cumulativeRunTime(at now: Date) -> TimeInterval {
+        max(0, rawTrackedWorkTime(at: now) + manualWorkedDurationAdjustment)
+    }
+
+    private func rawTrackedWorkTime(at now: Date) -> TimeInterval {
         let inFlightRun = isRunning ? currentRunDuration(at: now) : 0
         return sessionRunDurations.reduce(0, +) + inFlightRun
     }
@@ -768,6 +806,7 @@ final class AppModel {
         longestRunDuration = 0
         lastResetElapsed = nil
         accumulatedElapsed = 0
+        manualWorkedDurationAdjustment = 0
 
         if wasRunning {
             runningSince = newDayStart
@@ -814,6 +853,7 @@ final class AppModel {
         typingPermissionState = startState
         DebugTrace.log("refreshTypingCapture startState=\(String(describing: startState))")
         if startState == .ready, let typingStore {
+            lastTypingCaptureRetryAt = nil
             typingStoredSummary = (try? typingStore.typingSummary(from: currentDayStart, to: currentTime)) ?? .zero
         } else if revealPanelOnFailure {
             DispatchQueue.main.async { [weak self] in
@@ -952,10 +992,19 @@ final class AppModel {
     }
 
     private func persistHistory() {
-        guard let data = try? JSONEncoder().encode(dayHistory) else {
+        if typingStore == nil {
+            guard let data = try? JSONEncoder().encode(dayHistory) else {
+                return
+            }
+            UserDefaults.standard.set(data, forKey: DefaultsKey.dayHistory)
             return
         }
-        UserDefaults.standard.set(data, forKey: DefaultsKey.dayHistory)
+
+        do {
+            try typingStore?.saveDailySummaries(dayHistory)
+        } catch {
+            DebugTrace.log("persistHistory failed error=\(error.localizedDescription)")
+        }
     }
 
     private func persistSession() {
@@ -972,6 +1021,7 @@ final class AppModel {
             longestRunDuration: longestRunDuration,
             lastResetElapsed: lastResetElapsed,
             accumulatedElapsed: accumulatedElapsed,
+            manualWorkedDurationAdjustment: manualWorkedDurationAdjustment,
             runningSince: runningSince,
             pausedSince: pausedSince,
             currentDayStart: currentDayStart,
@@ -982,19 +1032,42 @@ final class AppModel {
             activeMouseDistance: activeMouseSession?.distance
         )
 
-        guard let data = try? JSONEncoder().encode(session) else {
+        if typingStore == nil {
+            guard let data = try? JSONEncoder().encode(session) else {
+                return
+            }
+            do {
+                let url = try Self.sessionFileURL()
+                try data.write(to: url, options: .atomic)
+            } catch {
+                DebugTrace.log("persistSession failed error=\(error.localizedDescription)")
+            }
             return
         }
 
         do {
-            let url = try Self.sessionFileURL()
-            try data.write(to: url, options: .atomic)
+            try typingStore?.saveSession(session)
         } catch {
             DebugTrace.log("persistSession failed error=\(error.localizedDescription)")
         }
     }
 
-    private static func loadHistory() -> [DailyWorkSummary] {
+    private func persistSettings() {
+        if typingStore == nil {
+            UserDefaults.standard.set(menuBarDisplayMode.rawValue, forKey: DefaultsKey.menuBarDisplayMode)
+            UserDefaults.standard.set(hourlyRate, forKey: DefaultsKey.hourlyRate)
+            return
+        }
+
+        do {
+            try typingStore?.setString(menuBarDisplayMode.rawValue, for: DefaultsKey.menuBarDisplayMode)
+            try typingStore?.setDouble(hourlyRate, for: DefaultsKey.hourlyRate)
+        } catch {
+            DebugTrace.log("persistSettings failed error=\(error.localizedDescription)")
+        }
+    }
+
+    private static func loadLegacyHistory() -> [DailyWorkSummary] {
         guard let data = UserDefaults.standard.data(forKey: DefaultsKey.dayHistory),
               let summaries = try? JSONDecoder().decode([DailyWorkSummary].self, from: data)
         else {
@@ -1003,7 +1076,7 @@ final class AppModel {
         return summaries.sorted { $0.dayStart > $1.dayStart }
     }
 
-    private static func loadPersistedSession() -> PersistedSession? {
+    private static func loadLegacySession() -> PersistedSession? {
         guard let url = try? sessionFileURL(),
               let data = try? Data(contentsOf: url),
               let session = try? JSONDecoder().decode(PersistedSession.self, from: data)
@@ -1028,8 +1101,31 @@ final class AppModel {
             appropriateFor: nil,
             create: true
         ).appendingPathComponent("WorkTimer", isDirectory: true)
-        let databaseURL = directory.appendingPathComponent("typing.sqlite", isDirectory: false)
+        let databaseURL = directory.appendingPathComponent("worktimer.sqlite", isDirectory: false)
+        try migrateLegacyDatabaseIfNeeded(in: directory, targetURL: databaseURL)
         return try TypingStore(databaseURL: databaseURL)
+    }
+
+    private static func migrateLegacyDatabaseIfNeeded(in directory: URL, targetURL: URL) throws {
+        guard !FileManager.default.fileExists(atPath: targetURL.path) else {
+            return
+        }
+
+        let legacyURL = directory.appendingPathComponent("typing.sqlite", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else {
+            return
+        }
+
+        try FileManager.default.moveItem(at: legacyURL, to: targetURL)
+
+        let fileManager = FileManager.default
+        for suffix in ["-shm", "-wal"] {
+            let legacySidecar = URL(fileURLWithPath: legacyURL.path + suffix)
+            let targetSidecar = URL(fileURLWithPath: targetURL.path + suffix)
+            if fileManager.fileExists(atPath: legacySidecar.path) {
+                try? fileManager.moveItem(at: legacySidecar, to: targetSidecar)
+            }
+        }
     }
 
     private static func characterIncrement(for mutation: TypingMutation) -> Int {
@@ -1056,6 +1152,7 @@ final class AppModel {
         longestRunDuration = session.longestRunDuration
         lastResetElapsed = session.lastResetElapsed
         accumulatedElapsed = session.accumulatedElapsed
+        manualWorkedDurationAdjustment = session.manualWorkedDurationAdjustment
         runningSince = session.runningSince
         pausedSince = session.pausedSince
         currentDayStart = session.currentDayStart
@@ -1151,6 +1248,30 @@ final class AppModel {
         return formatter
     }()
 
+}
+
+struct PersistedSession: Codable, Equatable {
+    let isRunning: Bool
+    let logEntries: [TimerLogEntry]
+    let pauseCount: Int
+    let resumeCount: Int
+    let resetCount: Int
+    let launchedAt: Date
+    let currentTime: Date
+    let sessionRunDurations: [TimeInterval]
+    let totalPausedDuration: TimeInterval
+    let longestRunDuration: TimeInterval
+    let lastResetElapsed: TimeInterval?
+    let accumulatedElapsed: TimeInterval
+    let manualWorkedDurationAdjustment: TimeInterval
+    let runningSince: Date?
+    let pausedSince: Date?
+    let currentDayStart: Date
+    let mouseStoredDuration: TimeInterval?
+    let mouseStoredDistance: Double?
+    let activeMouseStartedAt: Date?
+    let activeMouseLastMovedAt: Date?
+    let activeMouseDistance: Double?
 }
 
 struct TimerLogEntry: Identifiable, Codable, Equatable {

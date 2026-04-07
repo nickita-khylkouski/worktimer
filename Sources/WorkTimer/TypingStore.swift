@@ -11,7 +11,7 @@ enum TypingStoreError: Error {
 final class TypingStore: @unchecked Sendable {
     private let databaseURL: URL
     private var database: OpaquePointer?
-    private let queue = DispatchQueue(label: "typekeep.sqlite")
+    private let queue = DispatchQueue(label: "worktimer.sqlite")
 
     init(databaseURL: URL) throws {
         self.databaseURL = databaseURL
@@ -167,6 +167,115 @@ final class TypingStore: @unchecked Sendable {
         }
     }
 
+    func setString(_ value: String, for key: String) throws {
+        try queue.sync {
+            let sql = """
+            INSERT INTO app_settings (key, value_text)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value_text = excluded.value_text;
+            """
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            bind(text: key, to: 1, in: statement)
+            bind(text: value, to: 2, in: statement)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw TypingStoreError.stepFailed(lastErrorMessage())
+            }
+        }
+    }
+
+    func stringSetting(for key: String) throws -> String? {
+        try queue.sync {
+            let statement = try prepare("SELECT value_text FROM app_settings WHERE key = ? LIMIT 1;")
+            defer { sqlite3_finalize(statement) }
+            bind(text: key, to: 1, in: statement)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            guard let value = sqlite3_column_text(statement, 0) else {
+                return nil
+            }
+            return String(cString: value)
+        }
+    }
+
+    func setDouble(_ value: Double, for key: String) throws {
+        try setString(String(value), for: key)
+    }
+
+    func doubleSetting(for key: String) throws -> Double? {
+        guard let value = try stringSetting(for: key) else {
+            return nil
+        }
+        return Double(value)
+    }
+
+    func saveSession(_ session: PersistedSession) throws {
+        let payload = try JSONEncoder().encode(session)
+        try queue.sync {
+            let sql = """
+            INSERT INTO session_state (slot, payload_json)
+            VALUES (1, ?)
+            ON CONFLICT(slot) DO UPDATE SET payload_json = excluded.payload_json;
+            """
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_blob(statement, 1, (payload as NSData).bytes, Int32(payload.count), Self.transientDestructor)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw TypingStoreError.stepFailed(lastErrorMessage())
+            }
+        }
+    }
+
+    func loadSession() throws -> PersistedSession? {
+        try queue.sync {
+            let statement = try prepare("SELECT payload_json FROM session_state WHERE slot = 1 LIMIT 1;")
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            guard let bytes = sqlite3_column_blob(statement, 0) else {
+                return nil
+            }
+            let count = Int(sqlite3_column_bytes(statement, 0))
+            let data = Data(bytes: bytes, count: count)
+            return try JSONDecoder().decode(PersistedSession.self, from: data)
+        }
+    }
+
+    func saveDailySummaries(_ summaries: [DailyWorkSummary]) throws {
+        let payload = try JSONEncoder().encode(summaries)
+        try queue.sync {
+            let sql = """
+            INSERT INTO day_history (slot, payload_json)
+            VALUES (1, ?)
+            ON CONFLICT(slot) DO UPDATE SET payload_json = excluded.payload_json;
+            """
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_blob(statement, 1, (payload as NSData).bytes, Int32(payload.count), Self.transientDestructor)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw TypingStoreError.stepFailed(lastErrorMessage())
+            }
+        }
+    }
+
+    func loadDailySummaries() throws -> [DailyWorkSummary] {
+        try queue.sync {
+            let statement = try prepare("SELECT payload_json FROM day_history WHERE slot = 1 LIMIT 1;")
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return []
+            }
+            guard let bytes = sqlite3_column_blob(statement, 0) else {
+                return []
+            }
+            let count = Int(sqlite3_column_bytes(statement, 0))
+            let data = Data(bytes: bytes, count: count)
+            return try JSONDecoder().decode([DailyWorkSummary].self, from: data)
+        }
+    }
+
     func delete(id: UUID) throws {
         try queue.sync {
             let statement = try prepare("DELETE FROM snippets WHERE id = ?;")
@@ -237,6 +346,30 @@ final class TypingStore: @unchecked Sendable {
         )
         try exec("CREATE INDEX IF NOT EXISTS typing_sessions_started_at_idx ON typing_sessions (started_at DESC);")
         try exec("CREATE INDEX IF NOT EXISTS typing_sessions_ended_at_idx ON typing_sessions (ended_at DESC);")
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_text TEXT NOT NULL
+            );
+            """
+        )
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS session_state (
+                slot INTEGER PRIMARY KEY CHECK (slot = 1),
+                payload_json BLOB NOT NULL
+            );
+            """
+        )
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS day_history (
+                slot INTEGER PRIMARY KEY CHECK (slot = 1),
+                payload_json BLOB NOT NULL
+            );
+            """
+        )
     }
 
     private func exec(_ sql: String) throws {

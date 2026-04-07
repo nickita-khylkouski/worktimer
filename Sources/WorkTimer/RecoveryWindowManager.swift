@@ -71,7 +71,7 @@ final class RecoveryWindowManager {
     }
 
     private func configure(_ window: RecoveryPanel) {
-        window.title = "Timer Controls"
+        window.title = "WorkTimer"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true

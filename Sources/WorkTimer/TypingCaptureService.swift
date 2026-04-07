@@ -14,8 +14,8 @@ final class TypingCaptureService: @unchecked Sendable {
     var onInput: ((TypingInput) -> Void)?
     var onHotKey: (() -> Void)?
 
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
     private var observedInputCount = 0
 
     func permissionState(promptIfNeeded: Bool) -> CapturePermissionState {
@@ -23,15 +23,26 @@ final class TypingCaptureService: @unchecked Sendable {
             "AXTrustedCheckOptionPrompt": promptIfNeeded,
         ] as CFDictionary
         let accessibilityGranted = AXIsProcessTrustedWithOptions(accessibilityOptions)
-        if !accessibilityGranted {
-            return .missingAccessibility
+        let listenAccessGranted = Self.preflightListenAccess()
+
+        DebugTrace.log(
+            "TypingCaptureService permission accessibility=\(accessibilityGranted) listen=\(listenAccessGranted) prompt=\(promptIfNeeded)"
+        )
+
+        // The current capture path uses a session event tap, which needs
+        // Input Monitoring on modern macOS. We still prompt for
+        // Accessibility because the app also relies on broader event access
+        // behavior across OS versions, but listen-event approval is the
+        // hard gate for starting capture.
+        if listenAccessGranted {
+            return .ready
         }
 
-        if !Self.preflightListenAccess(), promptIfNeeded {
+        if promptIfNeeded && !listenAccessGranted {
             _ = Self.requestListenAccess()
         }
 
-        return .ready
+        return accessibilityGranted ? .missingInputMonitoring : .missingAccessibility
     }
 
     func start() -> CapturePermissionState {
@@ -41,60 +52,102 @@ final class TypingCaptureService: @unchecked Sendable {
             return state
         }
 
-        if globalMonitor != nil || localMonitor != nil {
-            DebugTrace.log("TypingCaptureService start reused-existing-monitors")
+        if eventTap != nil {
+            DebugTrace.log("TypingCaptureService start reused-existing-event-tap")
             return .ready
         }
 
         if !Thread.isMainThread {
             DispatchQueue.main.sync { [weak self] in
-                self?.installEventMonitorsIfNeeded()
+                self?.installEventTapIfNeeded()
             }
         } else {
-            installEventMonitorsIfNeeded()
+            installEventTapIfNeeded()
         }
 
-        guard globalMonitor != nil || localMonitor != nil else {
-            DebugTrace.log("TypingCaptureService start failed monitor-install")
+        guard eventTap != nil, runLoopSource != nil else {
+            DebugTrace.log("TypingCaptureService start failed event-tap-install")
             return .failedToInstallTap
         }
 
-        DebugTrace.log("TypingCaptureService start installed-monitors")
+        DebugTrace.log("TypingCaptureService start installed-event-tap")
         return .ready
     }
 
     func stop() {
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            CFMachPortInvalidate(eventTap)
         }
-        if let globalMonitor {
-            NSEvent.removeMonitor(globalMonitor)
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         }
-        localMonitor = nil
-        globalMonitor = nil
+        eventTap = nil
+        runLoopSource = nil
         observedInputCount = 0
     }
 
-    private func installEventMonitorsIfNeeded() {
-        if localMonitor == nil {
-            localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                self?.process(event)
-                return event
-            }
+    private func installEventTapIfNeeded() {
+        guard eventTap == nil else {
+            return
         }
 
-        if globalMonitor == nil {
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                self?.process(event)
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let callback: CGEventTapCallBack = { proxy, type, event, userInfo in
+            guard let userInfo else {
+                return Unmanaged.passUnretained(event)
             }
+
+            let service = Unmanaged<TypingCaptureService>
+                .fromOpaque(userInfo)
+                .takeUnretainedValue()
+
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let eventTap = service.eventTap {
+                    CGEvent.tapEnable(tap: eventTap, enable: true)
+                    DebugTrace.log("TypingCaptureService event-tap reenabled type=\(type.rawValue)")
+                }
+                return Unmanaged.passUnretained(event)
+            }
+
+            guard type == .keyDown else {
+                return Unmanaged.passUnretained(event)
+            }
+
+            service.process(event)
+            return Unmanaged.passUnretained(event)
         }
 
-        DebugTrace.log(
-            "TypingCaptureService installMonitors local=\(localMonitor != nil) global=\(globalMonitor != nil)"
-        )
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: callback,
+            userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        ) else {
+            DebugTrace.log("TypingCaptureService installEventTap failed tapCreate")
+            return
+        }
+
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            DebugTrace.log("TypingCaptureService installEventTap failed runLoopSource")
+            CFMachPortInvalidate(tap)
+            return
+        }
+
+        eventTap = tap
+        runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        DebugTrace.log("TypingCaptureService installEventTap enabled=true")
     }
 
-    private func process(_ event: NSEvent) {
+    private func process(_ event: CGEvent) {
+        guard let event = NSEvent(cgEvent: event) else {
+            return
+        }
+
         if Self.matchesLauncherShortcut(event) {
             DebugTrace.log("typingMonitor hotkey-detected")
             onHotKey?()

@@ -6,6 +6,26 @@ APP_NAME="WorkTimer"
 BUILD_CONFIGURATION="release"
 OPEN_AFTER_INSTALL=1
 
+resolve_signing_identity() {
+  if [[ -n "${WORKTIMER_SIGN_IDENTITY:-}" ]]; then
+    printf '%s\n' "$WORKTIMER_SIGN_IDENTITY"
+    return 0
+  fi
+
+  local personal_identity
+  personal_identity="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '\"' '/Developer ID Application: Nickita Khy \\(HSRWKMA3SL\\)/ { print $2; exit }')"
+  if [[ -n "$personal_identity" ]]; then
+    printf '%s\n' "$personal_identity"
+    return 0
+  fi
+
+  local any_developer_id
+  any_developer_id="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '\"' '/Developer ID Application:/ { print $2; exit }')"
+  if [[ -n "$any_developer_id" ]]; then
+    printf '%s\n' "$any_developer_id"
+  fi
+}
+
 for arg in "$@"; do
   case "$arg" in
     debug|release)
@@ -44,7 +64,14 @@ if [ -d "$ROOT_DIR/AppBundle/Resources" ]; then
   cp -R "$ROOT_DIR/AppBundle/Resources/." "$APP_DIR/Contents/Resources/"
 fi
 
-codesign --force --deep --sign - "$APP_DIR"
+SIGNING_IDENTITY="$(resolve_signing_identity || true)"
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+  codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_DIR"
+  SIGNING_SUMMARY="Developer ID signed with: $SIGNING_IDENTITY"
+else
+  codesign --force --deep --sign - "$APP_DIR"
+  SIGNING_SUMMARY="Ad hoc signed (no Developer ID identity found)"
+fi
 
 if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
   pkill -x "$APP_NAME" >/dev/null 2>&1 || true
@@ -60,11 +87,15 @@ Installed ${APP_DIR}
 
 What to expect:
 - WorkTimer launches as a menu bar app and should appear at the top-right of the screen.
+- WorkTimer now also appears in the Dock while running.
 - Single click pauses or resumes.
 - Double click opens the panel.
 - Right click opens the panel.
 - Timer and pay tracking work immediately.
 - Typing stats and mouse travel need Accessibility and Input Monitoring.
+
+Signing:
+- ${SIGNING_SUMMARY}
 
 If you use Ice or another menu bar organizer, the item may start in the hidden section first.
 

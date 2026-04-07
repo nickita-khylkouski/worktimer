@@ -7,7 +7,7 @@ struct TypingStoreTests {
     func insertsAndPurgesExpiredSnippets() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-        let databaseURL = root.appendingPathComponent("typekeep.sqlite")
+        let databaseURL = root.appendingPathComponent("worktimer.sqlite")
         let store = try TypingStore(databaseURL: databaseURL)
 
         let expired = CapturedSnippet(
@@ -39,7 +39,7 @@ struct TypingStoreTests {
     func summarizesTypingSessions() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-        let databaseURL = root.appendingPathComponent("typekeep.sqlite")
+        let databaseURL = root.appendingPathComponent("worktimer.sqlite")
         let store = try TypingStore(databaseURL: databaseURL)
         let context = CaptureContext(appName: "Terminal", bundleIdentifier: "com.apple.Terminal", sessionKey: "terminal")
 
@@ -69,5 +69,58 @@ struct TypingStoreTests {
 
         #expect(summary.duration == 45)
         #expect(summary.characterCount == 165)
+    }
+
+    @Test
+    func persistsSessionHistoryAndSettings() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let databaseURL = root.appendingPathComponent("worktimer.sqlite")
+        let store = try TypingStore(databaseURL: databaseURL)
+        let day = Date(timeIntervalSince1970: 1_000)
+
+        let session = PersistedSession(
+            isRunning: true,
+            logEntries: [TimerLogEntry(kind: .paused, occurredAt: day, elapsedSnapshot: 42)],
+            pauseCount: 1,
+            resumeCount: 0,
+            resetCount: 0,
+            launchedAt: day,
+            currentTime: day.addingTimeInterval(42),
+            sessionRunDurations: [42],
+            totalPausedDuration: 0,
+            longestRunDuration: 42,
+            lastResetElapsed: nil,
+            accumulatedElapsed: 42,
+            manualWorkedDurationAdjustment: 18,
+            runningSince: day,
+            pausedSince: nil,
+            currentDayStart: day,
+            mouseStoredDuration: 5,
+            mouseStoredDistance: 120,
+            activeMouseStartedAt: nil,
+            activeMouseLastMovedAt: nil,
+            activeMouseDistance: nil
+        )
+        let summaries = [
+            DailyWorkSummary(
+                dayStart: day,
+                workedSeconds: 60,
+                earningsAmount: 2.5,
+                pauseCount: 1,
+                resetCount: 0,
+                mouseDistance: 120
+            )
+        ]
+
+        try store.setString("typingTime", for: "menuBarDisplayMode")
+        try store.setDouble(45.5, for: "hourlyRate")
+        try store.saveSession(session)
+        try store.saveDailySummaries(summaries)
+
+        #expect(try store.stringSetting(for: "menuBarDisplayMode") == "typingTime")
+        #expect(try store.doubleSetting(for: "hourlyRate") == 45.5)
+        #expect(try store.loadSession() == session)
+        #expect(try store.loadDailySummaries() == summaries)
     }
 }

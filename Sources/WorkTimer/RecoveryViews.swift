@@ -3,7 +3,9 @@ import SwiftUI
 struct TimerPanelView: View {
     @Bindable var model: AppModel
     @State private var hourlyRateInput = ""
+    @State private var workedTimeInput = ""
     @FocusState private var hourlyRateFieldFocused: Bool
+    @FocusState private var workedTimeFieldFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -23,10 +25,16 @@ struct TimerPanelView: View {
         .scrollIndicators(.visible)
         .onAppear {
             syncHourlyRateInput()
+            syncWorkedTimeInput()
         }
         .onChange(of: hourlyRateFieldFocused) { _, isFocused in
             if !isFocused {
                 commitHourlyRateInput()
+            }
+        }
+        .onChange(of: workedTimeFieldFocused) { _, isFocused in
+            if !isFocused {
+                commitWorkedTimeInput()
             }
         }
         .onChange(of: model.hourlyRate) { _, _ in
@@ -34,6 +42,12 @@ struct TimerPanelView: View {
                 return
             }
             syncHourlyRateInput()
+        }
+        .onChange(of: model.cumulativeRunText) { _, _ in
+            guard !workedTimeFieldFocused else {
+                return
+            }
+            syncWorkedTimeInput()
         }
         .onExitCommand {
             model.hideControlPanel()
@@ -68,6 +82,41 @@ struct TimerPanelView: View {
                 CompactMetric(label: "Status", value: model.stateLabel)
                 CompactMetric(label: "Today", value: model.cumulativeRunText)
                 CompactMetric(label: "Pay", value: model.currentEarningsText)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Edit today")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.56))
+
+                HStack(spacing: 8) {
+                    TextField("h:mm:ss", text: $workedTimeInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .focused($workedTimeFieldFocused)
+                        .onChange(of: workedTimeInput) { _, newValue in
+                            let sanitized = sanitizedWorkedTimeInput(newValue)
+                            if sanitized != newValue {
+                                workedTimeInput = sanitized
+                            }
+                        }
+                        .onSubmit {
+                            commitWorkedTimeInput()
+                        }
+
+                    Button("Set") {
+                        commitWorkedTimeInput()
+                    }
+                    .buttonStyle(MiniPanelButtonStyle())
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.045))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         }
         .panelCard()
@@ -169,18 +218,29 @@ struct TimerPanelView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.56))
 
+            if !model.isInstalledInApplications {
+                Button("Open Applications Folder") {
+                    model.openApplicationsFolder()
+                }
+                .buttonStyle(SecondaryPanelButtonStyle())
+            }
+
             if model.needsTypingPermissions {
                 HStack(spacing: 8) {
-                    Button("Request Access") {
+                    Button("Request + Open Settings") {
                         model.requestTypingPermissions()
                     }
                     .buttonStyle(SecondaryPanelButtonStyle())
 
-                    Button("Open Settings") {
-                        model.openSystemSettings()
+                    Button("Open Both Panes") {
+                        model.openTypingPermissionPanes()
                     }
                     .buttonStyle(TextPanelButtonStyle())
                 }
+
+                Text("After turning WorkTimer on in both panes, quit and reopen it once.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.46))
             }
 
             VStack(spacing: 8) {
@@ -221,11 +281,24 @@ struct TimerPanelView: View {
         hourlyRateInput = Self.moneyFormatter.string(from: NSNumber(value: model.hourlyRate)) ?? "0.00"
     }
 
+    private func syncWorkedTimeInput() {
+        workedTimeInput = model.cumulativeRunText
+    }
+
     private func commitHourlyRateInput() {
         let cleaned = sanitizedHourlyRateInput(hourlyRateInput)
         let parsedValue = Double(cleaned) ?? 0
         model.hourlyRate = parsedValue
         syncHourlyRateInput()
+    }
+
+    private func commitWorkedTimeInput() {
+        guard let parsedValue = parseWorkedTimeInput(workedTimeInput) else {
+            syncWorkedTimeInput()
+            return
+        }
+        model.setWorkedDuration(parsedValue)
+        syncWorkedTimeInput()
     }
 
     private func sanitizedHourlyRateInput(_ raw: String) -> String {
@@ -245,6 +318,39 @@ struct TimerPanelView: View {
         }
 
         return result
+    }
+
+    private func sanitizedWorkedTimeInput(_ raw: String) -> String {
+        raw.filter { $0.isNumber || $0 == ":" }
+    }
+
+    private func parseWorkedTimeInput(_ raw: String) -> TimeInterval? {
+        let cleaned = sanitizedWorkedTimeInput(raw)
+        guard !cleaned.isEmpty else {
+            return 0
+        }
+
+        let components = cleaned.split(separator: ":").map(String.init)
+        guard components.count <= 3 else {
+            return nil
+        }
+        guard components.allSatisfy({ Int($0) != nil }) else {
+            return nil
+        }
+
+        if components.count == 1 {
+            return TimeInterval((Int(components[0]) ?? 0) * 60)
+        }
+
+        let values = components.compactMap(Int.init)
+        switch values.count {
+        case 2:
+            return TimeInterval((values[0] * 60) + values[1])
+        case 3:
+            return TimeInterval((values[0] * 3600) + (values[1] * 60) + values[2])
+        default:
+            return nil
+        }
     }
 
     private static let moneyFormatter: NumberFormatter = {

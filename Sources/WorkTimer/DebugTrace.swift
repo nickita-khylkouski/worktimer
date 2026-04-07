@@ -2,8 +2,8 @@ import Foundation
 
 enum DebugTrace {
     static let enabled = true
-    private static let queue = DispatchQueue(label: "typekeep.debug-trace")
-    private static let fileURL = URL(fileURLWithPath: "/tmp/typekeep-debug.log")
+    private static let queue = DispatchQueue(label: "worktimer.debug-trace")
+    private static let fileURL = URL(fileURLWithPath: "/tmp/worktimer-debug.log")
 
     static func log(_ message: @autoclosure () -> String) {
         guard enabled else {

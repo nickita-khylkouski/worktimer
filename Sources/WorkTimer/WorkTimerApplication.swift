@@ -11,7 +11,7 @@ final class WorkTimerApplicationDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        NSApplication.shared.setActivationPolicy(.accessory)
+        NSApplication.shared.setActivationPolicy(.regular)
 
         let model = AppModel()
         self.model = model
@@ -25,6 +25,11 @@ final class WorkTimerApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        model?.openControlPanel()
+        return true
     }
 
     @MainActor
