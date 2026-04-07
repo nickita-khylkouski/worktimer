@@ -1,0 +1,962 @@
+import AppKit
+import Foundation
+import Observation
+import SwiftUI
+
+@MainActor
+@Observable
+final class AppModel {
+    enum MenuBarDisplayMode: String, CaseIterable {
+        case elapsed
+        case earnings
+        case typingTime
+        case charactersPerMinute
+        case wordsPerMinute
+        case characters
+        case iconOnly
+
+        var title: String {
+            switch self {
+            case .elapsed:
+                return "Timer"
+            case .earnings:
+                return "Money"
+            case .typingTime:
+                return "Type Time"
+            case .charactersPerMinute:
+                return "CPM"
+            case .wordsPerMinute:
+                return "WPM"
+            case .characters:
+                return "Chars"
+            case .iconOnly:
+                return "Icon"
+            }
+        }
+    }
+
+    private enum DefaultsKey {
+        static let menuBarDisplayMode = "menuBarDisplayMode"
+        static let hourlyRate = "hourlyRate"
+        static let dayHistory = "dayHistory"
+    }
+
+    private struct PersistedSession: Codable {
+        let isRunning: Bool
+        let logEntries: [TimerLogEntry]
+        let pauseCount: Int
+        let resumeCount: Int
+        let resetCount: Int
+        let launchedAt: Date
+        let currentTime: Date
+        let sessionRunDurations: [TimeInterval]
+        let totalPausedDuration: TimeInterval
+        let longestRunDuration: TimeInterval
+        let lastResetElapsed: TimeInterval?
+        let accumulatedElapsed: TimeInterval
+        let runningSince: Date?
+        let pausedSince: Date?
+        let currentDayStart: Date
+    }
+
+    private struct ActiveTypingSession {
+        let startedAt: Date
+        let context: CaptureContext
+        var lastInputAt: Date
+        var characterCount: Int
+    }
+
+    var menuBarDisplayMode: MenuBarDisplayMode {
+        didSet {
+            UserDefaults.standard.set(menuBarDisplayMode.rawValue, forKey: DefaultsKey.menuBarDisplayMode)
+            refreshStatusItem()
+        }
+    }
+
+    var hourlyRate: Double {
+        didSet {
+            if hourlyRate < 0 {
+                hourlyRate = 0
+                return
+            }
+
+            UserDefaults.standard.set(hourlyRate, forKey: DefaultsKey.hourlyRate)
+            refreshStatusItem()
+            persistHistory()
+        }
+    }
+
+    private(set) var isRunning: Bool
+    private(set) var logEntries: [TimerLogEntry] = []
+    private(set) var pauseCount = 0
+    private(set) var resumeCount = 0
+    private(set) var resetCount = 0
+    private(set) var launchedAt: Date
+    private(set) var currentTime: Date
+    private(set) var sessionRunDurations: [TimeInterval] = []
+    private(set) var totalPausedDuration: TimeInterval = 0
+    private(set) var longestRunDuration: TimeInterval = 0
+    private(set) var lastResetElapsed: TimeInterval?
+    private(set) var dayHistory: [DailyWorkSummary]
+    private(set) var typingPermissionState: CapturePermissionState = .unknown
+    private(set) var typingStoredSummary: TypingSummary = .zero
+
+    let recoveryWindowManager = RecoveryWindowManager()
+
+    private let statusItemController: StatusItemController?
+    private let calendar = Calendar.autoupdatingCurrent
+    private let typingCaptureService = TypingCaptureService()
+    private let typingStore: TypingStore?
+
+    private var tickerTask: Task<Void, Never>?
+    private var isStarted = false
+    private var accumulatedElapsed: TimeInterval = 0
+    private var runningSince: Date?
+    private var pausedSince: Date?
+    private var currentDayStart: Date
+    private var activeTypingSession: ActiveTypingSession?
+
+    private let typingIdleThreshold: TimeInterval = 5
+
+    init(now: Date = .now, installsStatusItem: Bool = true, typingDatabaseURL: URL? = nil) {
+        let storedMode = UserDefaults.standard.string(forKey: DefaultsKey.menuBarDisplayMode)
+        let initialMode = MenuBarDisplayMode(rawValue: storedMode ?? "") ?? .elapsed
+        let initialDayStart = Calendar.autoupdatingCurrent.startOfDay(for: now)
+        let statusItemController = installsStatusItem ? StatusItemController() : nil
+        let typingStore = try? Self.makeTypingStore(enabled: installsStatusItem, databaseURL: typingDatabaseURL)
+
+        self.menuBarDisplayMode = initialMode
+        self.hourlyRate = max(0, UserDefaults.standard.double(forKey: DefaultsKey.hourlyRate))
+        self.isRunning = true
+        self.launchedAt = initialDayStart
+        self.currentTime = now
+        self.dayHistory = Self.loadHistory()
+        self.currentDayStart = initialDayStart
+        self.runningSince = now
+        self.statusItemController = statusItemController
+        self.typingStore = typingStore
+        if let typingStore {
+            self.typingStoredSummary = (try? typingStore.typingSummary(from: initialDayStart, to: now)) ?? .zero
+            self.typingPermissionState = .ready
+        }
+
+        if let session = Self.loadPersistedSession() {
+            restore(from: session, now: now)
+        }
+        DebugTrace.log("AppModel init installsStatusItem=\(installsStatusItem) mode=\(initialMode.rawValue)")
+
+        if let statusItemController {
+            statusItemController.onLeftClick = { [weak self] in
+                Task { @MainActor in
+                    self?.toggleRunning()
+                }
+            }
+            statusItemController.onDoubleLeftClick = { [weak self, weak statusItemController] in
+                Task { @MainActor in
+                    self?.openControlPanel(relativeTo: statusItemController?.button)
+                }
+            }
+            statusItemController.onRightClick = { [weak self, weak statusItemController] in
+                Task { @MainActor in
+                    self?.toggleControlPanel(relativeTo: statusItemController?.button)
+                }
+            }
+        }
+
+        typingCaptureService.onInput = { [weak self] input in
+            Task { @MainActor in
+                self?.recordTypingInput(input, at: .now)
+            }
+        }
+        typingCaptureService.onHotKey = { [weak self] in
+            Task { @MainActor in
+                self?.openControlPanel()
+            }
+        }
+
+        rollDayIfNeeded(now: now)
+        currentTime = now
+        persistSession()
+    }
+
+    var elapsedTime: TimeInterval {
+        elapsed(at: currentTime)
+    }
+
+    var elapsedText: String {
+        Self.formatElapsed(elapsedTime)
+    }
+
+    var cumulativeRunTime: TimeInterval {
+        cumulativeRunTime(at: currentTime)
+    }
+
+    var cumulativeRunText: String {
+        Self.formatElapsed(cumulativeRunTime)
+    }
+
+    var launchDurationText: String {
+        Self.formatElapsed(currentTime.timeIntervalSince(launchedAt))
+    }
+
+    var totalPausedText: String {
+        Self.formatElapsed(totalPausedTime)
+    }
+
+    var totalPausedTime: TimeInterval {
+        let inFlightPause = (!isRunning && pausedSince != nil) ? currentPauseDuration(at: currentTime) : 0
+        return totalPausedDuration + inFlightPause
+    }
+
+    var totalToggleCount: Int {
+        pauseCount + resumeCount
+    }
+
+    var actionCount: Int {
+        logEntries.count
+    }
+
+    var completedRunCount: Int {
+        sessionRunDurations.count
+    }
+
+    var averageRunDuration: TimeInterval {
+        guard !sessionRunDurations.isEmpty else {
+            return 0
+        }
+        return sessionRunDurations.reduce(0, +) / Double(sessionRunDurations.count)
+    }
+
+    var averageRunText: String {
+        Self.formatElapsed(averageRunDuration)
+    }
+
+    var longestRunText: String {
+        Self.formatElapsed(longestRunDuration)
+    }
+
+    var currentPhaseDuration: TimeInterval {
+        isRunning ? currentRunDuration(at: currentTime) : currentPauseDuration(at: currentTime)
+    }
+
+    var currentPhaseText: String {
+        Self.formatElapsed(currentPhaseDuration)
+    }
+
+    var currentPhaseLabel: String {
+        isRunning ? "Current Run" : "Current Pause"
+    }
+
+    var activeShare: Double {
+        let sessionLength = currentTime.timeIntervalSince(currentDayStart)
+        guard sessionLength > 0 else {
+            return isRunning ? 1 : 0
+        }
+        return min(max(cumulativeRunTime / sessionLength, 0), 1)
+    }
+
+    var activeShareText: String {
+        "\(Int((activeShare * 100).rounded()))%"
+    }
+
+    var sessionStartedText: String {
+        Self.dayFormatter.string(from: currentDayStart)
+    }
+
+    var lastResetText: String {
+        guard let lastResetElapsed else {
+            return "None yet"
+        }
+        return Self.formatElapsed(lastResetElapsed)
+    }
+
+    var stateLabel: String {
+        isRunning ? "Running" : "Paused"
+    }
+
+    var lastActionSummary: String {
+        guard let last = logEntries.first else {
+            return "No actions yet."
+        }
+        return "\(last.title) at \(Self.timestampFormatter.string(from: last.occurredAt))"
+    }
+
+    var currentEarnings: Double {
+        (cumulativeRunTime / 3600) * hourlyRate
+    }
+
+    var currentEarningsText: String {
+        Self.formatCurrency(currentEarnings)
+    }
+
+    var hourlyRateText: String {
+        Self.formatCurrency(hourlyRate) + "/hr"
+    }
+
+    var topBarText: String {
+        switch menuBarDisplayMode {
+        case .elapsed:
+            return elapsedText
+        case .earnings:
+            return currentEarningsText
+        case .typingTime:
+            return typingTimeText
+        case .charactersPerMinute:
+            return typingCharactersPerMinuteText + " CPM"
+        case .wordsPerMinute:
+            return typingWordsPerMinuteText + " WPM"
+        case .characters:
+            return typingCharacterCountText + " chars"
+        case .iconOnly:
+            return elapsedText
+        }
+    }
+
+    var todaySummary: DailyWorkSummary {
+        DailyWorkSummary(
+            dayStart: currentDayStart,
+            workedSeconds: cumulativeRunTime,
+            earningsAmount: currentEarnings,
+            pauseCount: pauseCount,
+            resetCount: resetCount
+        )
+    }
+
+    var dailySummaries: [DailyWorkSummary] {
+        var summaries = dayHistory.filter { !calendar.isDate($0.dayStart, inSameDayAs: currentDayStart) }
+        summaries.insert(todaySummary, at: 0)
+        return summaries.sorted { $0.dayStart > $1.dayStart }
+    }
+
+    var isTyping: Bool {
+        guard let activeTypingSession else {
+            return false
+        }
+        return currentTime.timeIntervalSince(activeTypingSession.lastInputAt) < typingIdleThreshold
+    }
+
+    var typingStatusLabel: String {
+        switch typingPermissionState {
+        case .unknown:
+            return "Checking"
+        case .ready:
+            return isTyping ? "Typing" : "Idle"
+        case .missingAccessibility:
+            return "Needs Accessibility"
+        case .missingInputMonitoring:
+            return "Needs Input Monitoring"
+        case .failedToInstallTap:
+            return "Tap Failed"
+        }
+    }
+
+    var typingStatusDetail: String {
+        switch typingPermissionState {
+        case .unknown:
+            return "Preparing keyboard monitoring."
+        case .ready:
+            return "Typing time keeps short pauses under 5 seconds inside the same session."
+        case .missingAccessibility:
+            return "Enable Accessibility for WorkTimer in System Settings."
+        case .missingInputMonitoring:
+            return "Enable Input Monitoring for WorkTimer in System Settings."
+        case .failedToInstallTap:
+            return "WorkTimer could not install the keyboard listener."
+        }
+    }
+
+    var typingSummary: TypingSummary {
+        var duration = typingStoredSummary.duration
+        var characters = typingStoredSummary.characterCount
+        if let activeTypingSession {
+            duration += max(0, activeTypingSession.lastInputAt.timeIntervalSince(activeTypingSession.startedAt))
+            characters += activeTypingSession.characterCount
+        }
+        return TypingSummary(duration: duration, characterCount: characters)
+    }
+
+    var typingTimeText: String {
+        Self.formatElapsed(typingSummary.duration)
+    }
+
+    var typingCharacterCountText: String {
+        "\(typingSummary.characterCount)"
+    }
+
+    var typingCharactersPerMinute: Double {
+        let minutes = typingSummary.duration / 60
+        guard minutes > 0 else {
+            return 0
+        }
+        return Double(typingSummary.characterCount) / minutes
+    }
+
+    var typingCharactersPerMinuteText: String {
+        "\(Int(typingCharactersPerMinute.rounded()))"
+    }
+
+    var typingWordsPerMinute: Double {
+        typingCharactersPerMinute / 5
+    }
+
+    var typingWordsPerMinuteText: String {
+        "\(Int(typingWordsPerMinute.rounded()))"
+    }
+
+    var showIconOnly: Bool {
+        get { menuBarDisplayMode == .iconOnly }
+        set { menuBarDisplayMode = newValue ? .iconOnly : .elapsed }
+    }
+
+    var summaryText: String {
+        [
+            "State: \(stateLabel)",
+            "Today: \(sessionStartedText)",
+            "Current timer: \(elapsedText)",
+            "Today focus: \(cumulativeRunText)",
+            "Paused time: \(totalPausedText)",
+            "Longest run: \(longestRunText)",
+            "Hourly rate: \(hourlyRateText)",
+            "Current pay: \(currentEarningsText)",
+            "Active share: \(activeShareText)",
+            "Resets: \(resetCount)",
+            "Actions logged: \(actionCount)",
+        ].joined(separator: "\n")
+    }
+
+    func installRecoveryPanel<Content: View>(@ViewBuilder content: () -> Content) {
+        let controller = NSHostingController(rootView: content())
+        recoveryWindowManager.install(contentViewController: controller)
+    }
+
+    func startIfNeeded() {
+        guard !isStarted else {
+            return
+        }
+
+        isStarted = true
+        DebugTrace.log("AppModel startIfNeeded")
+        updateCurrentTime(.now)
+        startTypingCapture()
+
+        tickerTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                await self.tick()
+            }
+        }
+    }
+
+    func toggleRunning(at now: Date = .now) {
+        rollDayIfNeeded(now: now)
+        let elapsedBeforeToggle = elapsed(at: now)
+        currentTime = now
+
+        if isRunning {
+            finalizeCurrentRun(at: now)
+            accumulatedElapsed = elapsedBeforeToggle
+            runningSince = nil
+            isRunning = false
+            pausedSince = now
+            pauseCount += 1
+            appendLog(.paused, occurredAt: now, elapsedSnapshot: elapsedBeforeToggle)
+        } else {
+            if let pausedSince {
+                totalPausedDuration += max(0, now.timeIntervalSince(pausedSince))
+                self.pausedSince = nil
+            }
+            runningSince = now
+            isRunning = true
+            resumeCount += 1
+            appendLog(.resumed, occurredAt: now, elapsedSnapshot: elapsedBeforeToggle)
+        }
+
+        refreshStatusItem()
+        persistSession()
+    }
+
+    func resetTimer(at now: Date = .now) {
+        rollDayIfNeeded(now: now)
+        let elapsedBeforeReset = elapsed(at: now)
+        currentTime = now
+        resetCount += 1
+        lastResetElapsed = elapsedBeforeReset
+
+        if isRunning {
+            finalizeCurrentRun(at: now)
+        } else if let pausedSince {
+            totalPausedDuration += max(0, now.timeIntervalSince(pausedSince))
+        }
+
+        appendLog(.reset, occurredAt: now, elapsedSnapshot: elapsedBeforeReset)
+        accumulatedElapsed = 0
+        runningSince = isRunning ? now : nil
+        pausedSince = isRunning ? nil : now
+        refreshStatusItem()
+        persistSession()
+    }
+
+    func resetAndStart(at now: Date = .now) {
+        let shouldResume = !isRunning
+        resetTimer(at: now)
+        if shouldResume {
+            toggleRunning(at: now)
+        }
+    }
+
+    func clearLog() {
+        logEntries.removeAll()
+        persistSession()
+    }
+
+    func copySummary() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(summaryText, forType: .string)
+    }
+
+    func openControlPanel(relativeTo button: NSStatusBarButton? = nil) {
+        updateCurrentTime(.now)
+        recoveryWindowManager.show(relativeTo: button)
+    }
+
+    func hideControlPanel() {
+        recoveryWindowManager.hide()
+    }
+
+    func advance(to now: Date) {
+        updateCurrentTime(now)
+    }
+
+    func recordTypingInput(_ input: TypingInput, at now: Date = .now) {
+        guard typingPermissionState == .ready else {
+            return
+        }
+
+        currentTime = now
+        let characterIncrement = Self.characterIncrement(for: input.mutation)
+
+        if let activeTypingSession {
+            let contextChanged = activeTypingSession.context != input.context
+            let exceededIdleThreshold = now.timeIntervalSince(activeTypingSession.lastInputAt) >= typingIdleThreshold
+
+            if contextChanged || exceededIdleThreshold {
+                commitTypingSession(activeTypingSession)
+                self.activeTypingSession = nil
+            }
+        }
+
+        if var activeTypingSession = activeTypingSession {
+            activeTypingSession.lastInputAt = now
+            activeTypingSession.characterCount += characterIncrement
+            self.activeTypingSession = activeTypingSession
+        } else {
+            self.activeTypingSession = ActiveTypingSession(
+                startedAt: now,
+                context: input.context,
+                lastInputAt: now,
+                characterCount: characterIncrement
+            )
+        }
+    }
+
+    private func toggleControlPanel(relativeTo button: NSStatusBarButton?) {
+        updateCurrentTime(.now)
+        _ = recoveryWindowManager.toggle(relativeTo: button)
+    }
+
+    private func tick() async {
+        updateCurrentTime(.now)
+    }
+
+    private func updateCurrentTime(_ now: Date) {
+        rollDayIfNeeded(now: now)
+        currentTime = now
+        finalizeTypingIfIdle(at: now)
+        refreshStatusItem()
+        persistSession()
+    }
+
+    private func currentRunDuration(at now: Date) -> TimeInterval {
+        guard let runningSince else {
+            return 0
+        }
+        return max(0, now.timeIntervalSince(runningSince))
+    }
+
+    private func currentPauseDuration(at now: Date) -> TimeInterval {
+        guard let pausedSince else {
+            return 0
+        }
+        return max(0, now.timeIntervalSince(pausedSince))
+    }
+
+    private func cumulativeRunTime(at now: Date) -> TimeInterval {
+        let inFlightRun = isRunning ? currentRunDuration(at: now) : 0
+        return sessionRunDurations.reduce(0, +) + inFlightRun
+    }
+
+    private func elapsed(at now: Date) -> TimeInterval {
+        guard isRunning, let runningSince else {
+            return accumulatedElapsed
+        }
+        return accumulatedElapsed + now.timeIntervalSince(runningSince)
+    }
+
+    private func finalizeCurrentRun(at now: Date) {
+        let runDuration = currentRunDuration(at: now)
+        guard runDuration > 0 else {
+            return
+        }
+        sessionRunDurations.append(runDuration)
+        longestRunDuration = max(longestRunDuration, runDuration)
+    }
+
+    private func rollDayIfNeeded(now: Date) {
+        let newDayStart = calendar.startOfDay(for: now)
+        guard newDayStart > currentDayStart else {
+            return
+        }
+
+        if let activeTypingSession {
+            commitTypingSession(activeTypingSession)
+            self.activeTypingSession = nil
+        }
+
+        archiveCurrentDay(until: newDayStart)
+
+        let wasRunning = isRunning
+        currentDayStart = newDayStart
+        launchedAt = newDayStart
+        currentTime = now
+        logEntries.removeAll()
+        pauseCount = 0
+        resumeCount = 0
+        resetCount = 0
+        sessionRunDurations.removeAll()
+        totalPausedDuration = 0
+        longestRunDuration = 0
+        lastResetElapsed = nil
+        accumulatedElapsed = 0
+
+        if wasRunning {
+            runningSince = newDayStart
+            pausedSince = nil
+        } else {
+            runningSince = nil
+            pausedSince = newDayStart
+        }
+
+        if let typingStore {
+            typingStoredSummary = (try? typingStore.typingSummary(from: newDayStart, to: now)) ?? .zero
+        } else {
+            typingStoredSummary = .zero
+        }
+        persistSession()
+    }
+
+    private func startTypingCapture() {
+        typingPermissionState = typingCaptureService.permissionState(promptIfNeeded: true)
+        guard typingPermissionState == .ready else {
+            return
+        }
+
+        let startState = typingCaptureService.start()
+        typingPermissionState = startState
+        if startState == .ready, let typingStore {
+            typingStoredSummary = (try? typingStore.typingSummary(from: currentDayStart, to: currentTime)) ?? .zero
+        }
+    }
+
+    private func finalizeTypingIfIdle(at now: Date) {
+        guard let activeTypingSession else {
+            return
+        }
+        guard now.timeIntervalSince(activeTypingSession.lastInputAt) >= typingIdleThreshold else {
+            return
+        }
+
+        commitTypingSession(activeTypingSession)
+        self.activeTypingSession = nil
+    }
+
+    private func commitTypingSession(_ session: ActiveTypingSession) {
+        guard session.characterCount > 0 else {
+            return
+        }
+
+        let record = TypingSessionRecord(
+            id: UUID(),
+            startedAt: session.startedAt,
+            endedAt: session.lastInputAt,
+            context: session.context,
+            characterCount: session.characterCount
+        )
+
+        do {
+            try typingStore?.insert(record)
+            typingStoredSummary = TypingSummary(
+                duration: typingStoredSummary.duration + record.duration,
+                characterCount: typingStoredSummary.characterCount + record.characterCount
+            )
+        } catch {
+            DebugTrace.log("commitTypingSession failed error=\(error.localizedDescription)")
+        }
+    }
+
+    private func archiveCurrentDay(until boundary: Date) {
+        let workedSeconds = cumulativeRunTime(at: boundary)
+        guard workedSeconds > 0 || !logEntries.isEmpty || resetCount > 0 else {
+            return
+        }
+
+        let summary = DailyWorkSummary(
+            dayStart: currentDayStart,
+            workedSeconds: workedSeconds,
+            earningsAmount: (workedSeconds / 3600) * hourlyRate,
+            pauseCount: pauseCount,
+            resetCount: resetCount
+        )
+
+        if let existingIndex = dayHistory.firstIndex(where: { calendar.isDate($0.dayStart, inSameDayAs: currentDayStart) }) {
+            dayHistory[existingIndex] = summary
+        } else {
+            dayHistory.insert(summary, at: 0)
+        }
+
+        dayHistory.sort { $0.dayStart > $1.dayStart }
+        if dayHistory.count > 120 {
+            dayHistory.removeLast(dayHistory.count - 120)
+        }
+        persistHistory()
+    }
+
+    private func appendLog(_ kind: TimerLogEntry.Kind, occurredAt: Date, elapsedSnapshot: TimeInterval) {
+        logEntries.insert(
+            TimerLogEntry(kind: kind, occurredAt: occurredAt, elapsedSnapshot: elapsedSnapshot),
+            at: 0
+        )
+        if logEntries.count > 250 {
+            logEntries.removeLast(logEntries.count - 250)
+        }
+    }
+
+    private func refreshStatusItem() {
+        statusItemController?.update(
+            displayText: topBarText,
+            isRunning: isRunning,
+            displayMode: menuBarDisplayMode
+        )
+    }
+
+    private func persistHistory() {
+        guard let data = try? JSONEncoder().encode(dayHistory) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: DefaultsKey.dayHistory)
+    }
+
+    private func persistSession() {
+        let session = PersistedSession(
+            isRunning: isRunning,
+            logEntries: logEntries,
+            pauseCount: pauseCount,
+            resumeCount: resumeCount,
+            resetCount: resetCount,
+            launchedAt: launchedAt,
+            currentTime: currentTime,
+            sessionRunDurations: sessionRunDurations,
+            totalPausedDuration: totalPausedDuration,
+            longestRunDuration: longestRunDuration,
+            lastResetElapsed: lastResetElapsed,
+            accumulatedElapsed: accumulatedElapsed,
+            runningSince: runningSince,
+            pausedSince: pausedSince,
+            currentDayStart: currentDayStart
+        )
+
+        guard let data = try? JSONEncoder().encode(session) else {
+            return
+        }
+
+        do {
+            let url = try Self.sessionFileURL()
+            try data.write(to: url, options: .atomic)
+        } catch {
+            DebugTrace.log("persistSession failed error=\(error.localizedDescription)")
+        }
+    }
+
+    private static func loadHistory() -> [DailyWorkSummary] {
+        guard let data = UserDefaults.standard.data(forKey: DefaultsKey.dayHistory),
+              let summaries = try? JSONDecoder().decode([DailyWorkSummary].self, from: data)
+        else {
+            return []
+        }
+        return summaries.sorted { $0.dayStart > $1.dayStart }
+    }
+
+    private static func loadPersistedSession() -> PersistedSession? {
+        guard let url = try? sessionFileURL(),
+              let data = try? Data(contentsOf: url),
+              let session = try? JSONDecoder().decode(PersistedSession.self, from: data)
+        else {
+            return nil
+        }
+
+        return session
+    }
+
+    private static func makeTypingStore(enabled: Bool, databaseURL: URL?) throws -> TypingStore? {
+        if let databaseURL {
+            return try TypingStore(databaseURL: databaseURL)
+        }
+
+        guard enabled else {
+            return nil
+        }
+        let directory = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ).appendingPathComponent("WorkTimer", isDirectory: true)
+        let databaseURL = directory.appendingPathComponent("typing.sqlite", isDirectory: false)
+        return try TypingStore(databaseURL: databaseURL)
+    }
+
+    private static func characterIncrement(for mutation: TypingMutation) -> Int {
+        switch mutation {
+        case let .text(text):
+            return text.count
+        case .newline, .tab:
+            return 1
+        case .backspace:
+            return 0
+        }
+    }
+
+    private func restore(from session: PersistedSession, now: Date) {
+        isRunning = session.isRunning
+        logEntries = session.logEntries
+        pauseCount = session.pauseCount
+        resumeCount = session.resumeCount
+        resetCount = session.resetCount
+        launchedAt = session.launchedAt
+        currentTime = max(now, session.currentTime)
+        sessionRunDurations = session.sessionRunDurations
+        totalPausedDuration = session.totalPausedDuration
+        longestRunDuration = session.longestRunDuration
+        lastResetElapsed = session.lastResetElapsed
+        accumulatedElapsed = session.accumulatedElapsed
+        runningSince = session.runningSince
+        pausedSince = session.pausedSince
+        currentDayStart = session.currentDayStart
+    }
+
+    nonisolated private static func sessionFileURL() throws -> URL {
+        let directory = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ).appendingPathComponent("WorkTimer", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+        return directory.appendingPathComponent("session.json", isDirectory: false)
+    }
+
+    nonisolated static func formatElapsed(_ interval: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(interval.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        return "\(hours):" + String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    nonisolated static func formatCurrency(_ amount: Double) -> String {
+        let currencyCode = Locale.autoupdatingCurrent.currency?.identifier ?? "USD"
+        return amount.formatted(
+            .currency(code: currencyCode)
+                .precision(.fractionLength(2))
+        )
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .medium
+        return formatter
+    }()
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
+}
+
+struct TimerLogEntry: Identifiable, Codable, Equatable {
+    enum Kind: String, Codable, Equatable {
+        case paused
+        case resumed
+        case reset
+
+        var title: String {
+            switch self {
+            case .paused:
+                return "Paused"
+            case .resumed:
+                return "Resumed"
+            case .reset:
+                return "Reset"
+            }
+        }
+    }
+
+    let id: UUID
+    let kind: Kind
+    let occurredAt: Date
+    let elapsedSnapshot: TimeInterval
+
+    init(id: UUID = UUID(), kind: Kind, occurredAt: Date, elapsedSnapshot: TimeInterval) {
+        self.id = id
+        self.kind = kind
+        self.occurredAt = occurredAt
+        self.elapsedSnapshot = elapsedSnapshot
+    }
+
+    var title: String {
+        kind.title
+    }
+}
+
+struct DailyWorkSummary: Identifiable, Codable, Equatable {
+    let dayStart: Date
+    let workedSeconds: TimeInterval
+    let earningsAmount: Double
+    let pauseCount: Int
+    let resetCount: Int
+
+    var id: Date { dayStart }
+
+    var dayTitle: String {
+        if Calendar.autoupdatingCurrent.isDateInToday(dayStart) {
+            return "Today"
+        }
+        if Calendar.autoupdatingCurrent.isDateInYesterday(dayStart) {
+            return "Yesterday"
+        }
+        return dayStart.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var workedText: String {
+        AppModel.formatElapsed(workedSeconds)
+    }
+
+    var earningsText: String {
+        AppModel.formatCurrency(earningsAmount)
+    }
+}
