@@ -1,96 +1,120 @@
 # WorkTimer
 
-WorkTimer is a small macOS menu bar app for tracking work time, typing time, live pay, and simple daily history from the top-right of the screen.
+Small macOS menu bar timer for tracking work time from the top-right of the screen.
 
-## Features
+## What It Does
 
-- Count-up timer in the menu bar
-- Single click to pause/resume
-- Double click or right click to open the panel
-- Daily auto-reset with history
-- Optional live pay tracking
-- Typing stats:
-  - typing time
-  - character count
-  - CPM
-  - WPM
-- Menu bar display modes:
-  - timer
-  - money
-  - typing time
-  - CPM
-  - WPM
-  - character count
-  - icon
-- Launch at login
+- Starts counting up as soon as the app launches.
+- Lives in the macOS menu bar.
+- Tries to register itself to launch at login.
+- Single click pauses or resumes.
+- Double click opens the panel.
+- Right click opens the panel.
+- Resets automatically each day and keeps a daily log.
+- Can show timer, money, typing stats, mouse distance, or an icon in the menu bar.
+- Saves the current day session locally, so relaunching the app does not wipe the timer.
+- Tracks typing time, chars, CPM, WPM, and estimated on-screen mouse travel.
 
 ## Requirements
 
 - macOS 14 or newer
-- Xcode 16 or Swift 6 toolchain
+- Xcode 16 or current Swift 6 toolchain
 
 ## Install
 
 ```bash
+cd apps/typekeep
 ./scripts/install-app.sh
 ```
 
-This builds the app, installs `~/Applications/WorkTimer.app`, signs it ad hoc, and opens it.
+That builds a release app, installs it to `~/Applications/WorkTimer.app`, and opens it.
 
-## Use
+## Setup For Full Stats
 
-- Look in the top-right macOS menu bar.
-- Single click pauses or resumes the timer.
-- Double click opens the panel.
-- Right click opens the panel.
+Timer and pay tracking work right away.
 
-If you use Ice or Bartender, the item may start in the hidden section first.
+Typing and mouse stats need macOS privacy approval:
+
+- `System Settings > Privacy & Security > Accessibility`
+- `System Settings > Privacy & Security > Input Monitoring`
+
+You can jump straight there with:
+
+```bash
+cd apps/typekeep
+./scripts/open-permissions.sh
+```
+
+If permissions get stuck and you want to re-grant them cleanly:
+
+```bash
+cd apps/typekeep
+./scripts/reset-permissions.sh
+./scripts/open-permissions.sh
+```
 
 ## Launch Again Later
 
 ```bash
+cd apps/typekeep
 ./scripts/open-app.sh
 ```
 
-## Make A Shareable Zip
+or:
 
 ```bash
+open -na ~/Applications/WorkTimer.app
+```
+
+## Make A Sendable Build
+
+```bash
+cd apps/typekeep
 ./scripts/package-app.sh
 ```
 
-This creates:
+That creates:
 
 - `dist/WorkTimer-macOS.zip`
 - `dist/README-SEND-TO-FRIENDS.txt`
 
-## Privacy / Permissions
+## First-Run Behavior
 
-Typing stats require:
-
-- Accessibility
-- Input Monitoring
-
-If macOS asks for approval, check:
-
-- `System Settings > Privacy & Security > Accessibility`
-- `System Settings > Privacy & Security > Input Monitoring`
-- `System Settings > General > Login Items`
+- The app should appear in the top-right menu bar area.
+- The app also attempts to turn on launch-at-login automatically.
+- If macOS asks for approval, check `System Settings > General > Login Items`.
+- If you want typing stats or mouse travel, approve `WorkTimer` in both `Accessibility` and `Input Monitoring`.
+- If you use Ice, Bartender, or another menu bar organizer, it may appear in the hidden section first.
+- The default panel is simple black/white, with:
+  - current timer
+  - small reset button
+  - hourly pay input
+  - top-bar mode switch
+  - typing stats
+  - mouse travel stats
+  - daily history
+  - action log
 
 ## Development
 
-Run:
+Run directly from SwiftPM:
 
 ```bash
+cd apps/typekeep
 swift run WorkTimer
 ```
 
-Test:
+Run tests:
 
 ```bash
+cd apps/typekeep
 swift test
 ```
 
-## Local Data
+## Notes
 
-- Session state: `~/Library/Application Support/WorkTimer/session.json`
-- Typing stats DB: `~/Library/Application Support/WorkTimer/typing.sqlite`
+- Current session state is saved in `~/Library/Application Support/WorkTimer/session.json`.
+- Daily history is stored in user defaults.
+- Typing sessions are stored in `~/Library/Application Support/WorkTimer/typing.sqlite`.
+- Updating or reinstalling the app should preserve the current day timer.
+- Mouse distance is an estimate of cursor travel on the display surface, based on display size reported by macOS.

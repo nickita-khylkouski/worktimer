@@ -63,6 +63,13 @@ What to expect:
 - Single click pauses or resumes.
 - Double click opens the panel.
 - Right click opens the panel.
+- Timer and pay tracking work immediately.
+- Typing stats and mouse travel need Accessibility and Input Monitoring.
 
 If you use Ice or another menu bar organizer, the item may start in the hidden section first.
+
+Helpful commands:
+- Open permissions panes: ./scripts/open-permissions.sh
+- Reset permissions cleanly: ./scripts/reset-permissions.sh
+- Relaunch app: ./scripts/open-app.sh
 EOF

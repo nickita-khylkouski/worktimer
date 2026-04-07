@@ -31,6 +31,8 @@ How it works:
 - Single click pauses or resumes.
 - Double click opens the panel.
 - Right click opens the panel.
+- Timer and pay tracking work immediately.
+- Typing stats and mouse travel need Accessibility and Input Monitoring.
 
 If they see a macOS warning because the app is unsigned:
 1. Move WorkTimer.app into Applications first
@@ -44,6 +46,11 @@ If they use Ice/Bartender:
 Launch at login:
 - WorkTimer tries to enable launch-at-login automatically
 - If macOS asks for approval, check System Settings > General > Login Items
+
+Permissions for typing and mouse stats:
+- System Settings > Privacy & Security > Accessibility
+- System Settings > Privacy & Security > Input Monitoring
+- Turn on WorkTimer in both places
 EOF
 
 echo "Created $ZIP_PATH"

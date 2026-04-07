@@ -11,7 +11,7 @@ enum TypingStoreError: Error {
 final class TypingStore: @unchecked Sendable {
     private let databaseURL: URL
     private var database: OpaquePointer?
-    private let queue = DispatchQueue(label: "worktimer.sqlite")
+    private let queue = DispatchQueue(label: "typekeep.sqlite")
 
     init(databaseURL: URL) throws {
         self.databaseURL = databaseURL

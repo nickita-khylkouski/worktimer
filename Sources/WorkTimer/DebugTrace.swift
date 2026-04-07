@@ -2,8 +2,8 @@ import Foundation
 
 enum DebugTrace {
     static let enabled = true
-    private static let queue = DispatchQueue(label: "worktimer.debug-trace")
-    private static let fileURL = URL(fileURLWithPath: "/tmp/worktimer-debug.log")
+    private static let queue = DispatchQueue(label: "typekeep.debug-trace")
+    private static let fileURL = URL(fileURLWithPath: "/tmp/typekeep-debug.log")
 
     static func log(_ message: @autoclosure () -> String) {
         guard enabled else {
@@ -19,7 +19,7 @@ enum DebugTrace {
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 if let handle = try? FileHandle(forWritingTo: fileURL) {
                     defer { try? handle.close() }
-                    try? handle.seekToEnd()
+                    _ = try? handle.seekToEnd()
                     try? handle.write(contentsOf: data)
                 }
             } else {

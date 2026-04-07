@@ -13,6 +13,7 @@ final class AppModel {
         case charactersPerMinute
         case wordsPerMinute
         case characters
+        case mouseDistance
         case iconOnly
 
         var title: String {
@@ -29,6 +30,8 @@ final class AppModel {
                 return "WPM"
             case .characters:
                 return "Chars"
+            case .mouseDistance:
+                return "Mouse"
             case .iconOnly:
                 return "Icon"
             }
@@ -57,6 +60,11 @@ final class AppModel {
         let runningSince: Date?
         let pausedSince: Date?
         let currentDayStart: Date
+        let mouseStoredDuration: TimeInterval?
+        let mouseStoredDistance: Double?
+        let activeMouseStartedAt: Date?
+        let activeMouseLastMovedAt: Date?
+        let activeMouseDistance: Double?
     }
 
     private struct ActiveTypingSession {
@@ -64,6 +72,12 @@ final class AppModel {
         let context: CaptureContext
         var lastInputAt: Date
         var characterCount: Int
+    }
+
+    private struct ActiveMouseSession {
+        let startedAt: Date
+        var lastMovedAt: Date
+        var distance: Double
     }
 
     var menuBarDisplayMode: MenuBarDisplayMode {
@@ -100,12 +114,14 @@ final class AppModel {
     private(set) var dayHistory: [DailyWorkSummary]
     private(set) var typingPermissionState: CapturePermissionState = .unknown
     private(set) var typingStoredSummary: TypingSummary = .zero
+    private(set) var mouseStoredSummary: MouseSummary = .zero
 
     let recoveryWindowManager = RecoveryWindowManager()
 
     private let statusItemController: StatusItemController?
     private let calendar = Calendar.autoupdatingCurrent
     private let typingCaptureService = TypingCaptureService()
+    private let mouseCaptureService = MouseCaptureService()
     private let typingStore: TypingStore?
 
     private var tickerTask: Task<Void, Never>?
@@ -115,8 +131,10 @@ final class AppModel {
     private var pausedSince: Date?
     private var currentDayStart: Date
     private var activeTypingSession: ActiveTypingSession?
+    private var activeMouseSession: ActiveMouseSession?
 
     private let typingIdleThreshold: TimeInterval = 5
+    private let mouseIdleThreshold: TimeInterval = 2
 
     init(now: Date = .now, installsStatusItem: Bool = true, typingDatabaseURL: URL? = nil) {
         let storedMode = UserDefaults.standard.string(forKey: DefaultsKey.menuBarDisplayMode)
@@ -171,6 +189,11 @@ final class AppModel {
         typingCaptureService.onHotKey = { [weak self] in
             Task { @MainActor in
                 self?.openControlPanel()
+            }
+        }
+        mouseCaptureService.onSample = { [weak self] sample in
+            Task { @MainActor in
+                self?.recordMouseMovement(sample, at: .now)
             }
         }
 
@@ -306,7 +329,9 @@ final class AppModel {
         case .wordsPerMinute:
             return typingWordsPerMinuteText + " WPM"
         case .characters:
-            return typingCharacterCountText + " chars"
+            return Self.formatCompactCount(typingSummary.characterCount)
+        case .mouseDistance:
+            return mouseDistanceText
         case .iconOnly:
             return elapsedText
         }
@@ -318,7 +343,8 @@ final class AppModel {
             workedSeconds: cumulativeRunTime,
             earningsAmount: currentEarnings,
             pauseCount: pauseCount,
-            resetCount: resetCount
+            resetCount: resetCount,
+            mouseDistance: mouseSummary.distance
         )
     }
 
@@ -333,6 +359,13 @@ final class AppModel {
             return false
         }
         return currentTime.timeIntervalSince(activeTypingSession.lastInputAt) < typingIdleThreshold
+    }
+
+    var isMouseMoving: Bool {
+        guard let activeMouseSession else {
+            return false
+        }
+        return currentTime.timeIntervalSince(activeMouseSession.lastMovedAt) < mouseIdleThreshold
     }
 
     var typingStatusLabel: String {
@@ -365,11 +398,20 @@ final class AppModel {
         }
     }
 
+    var needsTypingPermissions: Bool {
+        switch typingPermissionState {
+        case .ready:
+            return false
+        case .unknown, .missingAccessibility, .missingInputMonitoring, .failedToInstallTap:
+            return true
+        }
+    }
+
     var typingSummary: TypingSummary {
         var duration = typingStoredSummary.duration
         var characters = typingStoredSummary.characterCount
         if let activeTypingSession {
-            duration += max(0, activeTypingSession.lastInputAt.timeIntervalSince(activeTypingSession.startedAt))
+            duration += activeTypingDuration(at: currentTime, for: activeTypingSession)
             characters += activeTypingSession.characterCount
         }
         return TypingSummary(duration: duration, characterCount: characters)
@@ -403,6 +445,40 @@ final class AppModel {
         "\(Int(typingWordsPerMinute.rounded()))"
     }
 
+    var mouseSummary: MouseSummary {
+        var duration = mouseStoredSummary.duration
+        var distance = mouseStoredSummary.distance
+        if let activeMouseSession {
+            duration += activeMouseDuration(at: currentTime, for: activeMouseSession)
+            distance += activeMouseSession.distance
+        }
+        return MouseSummary(duration: duration, distance: distance)
+    }
+
+    var mouseMoveTimeText: String {
+        Self.formatElapsed(mouseSummary.duration)
+    }
+
+    var mouseDistanceText: String {
+        Self.formatDistance(mouseSummary.distance)
+    }
+
+    var mouseDistancePerMinute: Double {
+        let minutes = mouseSummary.duration / 60
+        guard minutes > 0 else {
+            return 0
+        }
+        return mouseSummary.distance / minutes
+    }
+
+    var mouseDistancePerMinuteText: String {
+        Self.formatDistance(mouseDistancePerMinute)
+    }
+
+    var mouseStatusLabel: String {
+        isMouseMoving ? "Moving" : "Still"
+    }
+
     var showIconOnly: Bool {
         get { menuBarDisplayMode == .iconOnly }
         set { menuBarDisplayMode = newValue ? .iconOnly : .elapsed }
@@ -418,6 +494,8 @@ final class AppModel {
             "Longest run: \(longestRunText)",
             "Hourly rate: \(hourlyRateText)",
             "Current pay: \(currentEarningsText)",
+            "Mouse travel: \(mouseDistanceText)",
+            "Mouse time: \(mouseMoveTimeText)",
             "Active share: \(activeShareText)",
             "Resets: \(resetCount)",
             "Actions logged: \(actionCount)",
@@ -438,6 +516,7 @@ final class AppModel {
         DebugTrace.log("AppModel startIfNeeded")
         updateCurrentTime(.now)
         startTypingCapture()
+        startMouseCapture()
 
         tickerTask = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -516,6 +595,7 @@ final class AppModel {
     }
 
     func openControlPanel(relativeTo button: NSStatusBarButton? = nil) {
+        refreshTypingCapture(promptIfNeeded: false, revealPanelOnFailure: false)
         updateCurrentTime(.now)
         recoveryWindowManager.show(relativeTo: button)
     }
@@ -526,6 +606,24 @@ final class AppModel {
 
     func advance(to now: Date) {
         updateCurrentTime(now)
+    }
+
+    func requestTypingPermissions() {
+        refreshTypingCapture(promptIfNeeded: true, revealPanelOnFailure: true)
+    }
+
+    func openSystemSettings() {
+        let targetURL: URL
+        switch typingPermissionState {
+        case .missingAccessibility:
+            targetURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        case .missingInputMonitoring:
+            targetURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
+        case .unknown, .ready, .failedToInstallTap:
+            targetURL = URL(fileURLWithPath: "/System/Applications/System Settings.app")
+        }
+
+        NSWorkspace.shared.open(targetURL)
     }
 
     func recordTypingInput(_ input: TypingInput, at now: Date = .now) {
@@ -541,7 +639,7 @@ final class AppModel {
             let exceededIdleThreshold = now.timeIntervalSince(activeTypingSession.lastInputAt) >= typingIdleThreshold
 
             if contextChanged || exceededIdleThreshold {
-                commitTypingSession(activeTypingSession)
+                commitTypingSession(activeTypingSession, at: now)
                 self.activeTypingSession = nil
             }
         }
@@ -560,7 +658,34 @@ final class AppModel {
         }
     }
 
+    func recordMouseMovement(_ sample: MouseMovementSample, at now: Date = .now) {
+        guard sample.estimatedMillimeters > 0 else {
+            return
+        }
+
+        currentTime = now
+
+        if let activeMouseSession,
+           now.timeIntervalSince(activeMouseSession.lastMovedAt) >= mouseIdleThreshold {
+            commitMouseSession(activeMouseSession, at: now)
+            self.activeMouseSession = nil
+        }
+
+        if var activeMouseSession {
+            activeMouseSession.lastMovedAt = now
+            activeMouseSession.distance += sample.estimatedMillimeters
+            self.activeMouseSession = activeMouseSession
+        } else {
+            self.activeMouseSession = ActiveMouseSession(
+                startedAt: now,
+                lastMovedAt: now,
+                distance: sample.estimatedMillimeters
+            )
+        }
+    }
+
     private func toggleControlPanel(relativeTo button: NSStatusBarButton?) {
+        refreshTypingCapture(promptIfNeeded: false, revealPanelOnFailure: false)
         updateCurrentTime(.now)
         _ = recoveryWindowManager.toggle(relativeTo: button)
     }
@@ -573,6 +698,7 @@ final class AppModel {
         rollDayIfNeeded(now: now)
         currentTime = now
         finalizeTypingIfIdle(at: now)
+        finalizeMouseIfIdle(at: now)
         refreshStatusItem()
         persistSession()
     }
@@ -619,8 +745,12 @@ final class AppModel {
         }
 
         if let activeTypingSession {
-            commitTypingSession(activeTypingSession)
+            commitTypingSession(activeTypingSession, at: newDayStart)
             self.activeTypingSession = nil
+        }
+        if let activeMouseSession {
+            commitMouseSession(activeMouseSession, at: newDayStart)
+            self.activeMouseSession = nil
         }
 
         archiveCurrentDay(until: newDayStart)
@@ -652,19 +782,43 @@ final class AppModel {
         } else {
             typingStoredSummary = .zero
         }
+        mouseStoredSummary = .zero
         persistSession()
     }
 
     private func startTypingCapture() {
-        typingPermissionState = typingCaptureService.permissionState(promptIfNeeded: true)
-        guard typingPermissionState == .ready else {
+        refreshTypingCapture(promptIfNeeded: true, revealPanelOnFailure: true)
+    }
+
+    private func startMouseCapture() {
+        let installed = mouseCaptureService.start()
+        DebugTrace.log("startMouseCapture installed=\(installed)")
+    }
+
+    private func refreshTypingCapture(promptIfNeeded: Bool, revealPanelOnFailure: Bool) {
+        let state = typingCaptureService.permissionState(promptIfNeeded: promptIfNeeded)
+        typingPermissionState = state
+        DebugTrace.log(
+            "refreshTypingCapture permissionState=\(String(describing: state)) prompt=\(promptIfNeeded) reveal=\(revealPanelOnFailure)"
+        )
+        guard state == .ready else {
+            if revealPanelOnFailure {
+                DispatchQueue.main.async { [weak self] in
+                    self?.recoveryWindowManager.show(relativeTo: self?.statusItemController?.button)
+                }
+            }
             return
         }
 
         let startState = typingCaptureService.start()
         typingPermissionState = startState
+        DebugTrace.log("refreshTypingCapture startState=\(String(describing: startState))")
         if startState == .ready, let typingStore {
             typingStoredSummary = (try? typingStore.typingSummary(from: currentDayStart, to: currentTime)) ?? .zero
+        } else if revealPanelOnFailure {
+            DispatchQueue.main.async { [weak self] in
+                self?.recoveryWindowManager.show(relativeTo: self?.statusItemController?.button)
+            }
         }
     }
 
@@ -676,19 +830,36 @@ final class AppModel {
             return
         }
 
-        commitTypingSession(activeTypingSession)
+        commitTypingSession(activeTypingSession, at: now)
         self.activeTypingSession = nil
     }
 
-    private func commitTypingSession(_ session: ActiveTypingSession) {
+    private func finalizeMouseIfIdle(at now: Date) {
+        guard let activeMouseSession else {
+            return
+        }
+        guard now.timeIntervalSince(activeMouseSession.lastMovedAt) >= mouseIdleThreshold else {
+            return
+        }
+
+        commitMouseSession(activeMouseSession, at: now)
+        self.activeMouseSession = nil
+    }
+
+    private func commitTypingSession(_ session: ActiveTypingSession, at now: Date) {
         guard session.characterCount > 0 else {
+            return
+        }
+
+        let endedAt = actualTypingEndedAt(for: session)
+        guard endedAt > session.startedAt else {
             return
         }
 
         let record = TypingSessionRecord(
             id: UUID(),
             startedAt: session.startedAt,
-            endedAt: session.lastInputAt,
+            endedAt: endedAt,
             context: session.context,
             characterCount: session.characterCount
         )
@@ -704,9 +875,39 @@ final class AppModel {
         }
     }
 
+    private func activeTypingDuration(at now: Date, for session: ActiveTypingSession) -> TimeInterval {
+        let effectiveEnd = min(now, session.lastInputAt.addingTimeInterval(typingIdleThreshold))
+        return max(0, effectiveEnd.timeIntervalSince(session.startedAt))
+    }
+
+    private func actualTypingEndedAt(for session: ActiveTypingSession) -> Date {
+        max(session.lastInputAt, session.startedAt.addingTimeInterval(1))
+    }
+
+    private func commitMouseSession(_ session: ActiveMouseSession, at now: Date) {
+        guard session.distance > 0 else {
+            return
+        }
+
+        let endedAt = min(now, session.lastMovedAt.addingTimeInterval(mouseIdleThreshold))
+        guard endedAt > session.startedAt else {
+            return
+        }
+
+        mouseStoredSummary = MouseSummary(
+            duration: mouseStoredSummary.duration + endedAt.timeIntervalSince(session.startedAt),
+            distance: mouseStoredSummary.distance + session.distance
+        )
+    }
+
+    private func activeMouseDuration(at now: Date, for session: ActiveMouseSession) -> TimeInterval {
+        let effectiveEnd = min(now, session.lastMovedAt.addingTimeInterval(mouseIdleThreshold))
+        return max(0, effectiveEnd.timeIntervalSince(session.startedAt))
+    }
+
     private func archiveCurrentDay(until boundary: Date) {
         let workedSeconds = cumulativeRunTime(at: boundary)
-        guard workedSeconds > 0 || !logEntries.isEmpty || resetCount > 0 else {
+        guard workedSeconds > 0 || !logEntries.isEmpty || resetCount > 0 || mouseSummary.distance > 0 else {
             return
         }
 
@@ -715,7 +916,8 @@ final class AppModel {
             workedSeconds: workedSeconds,
             earningsAmount: (workedSeconds / 3600) * hourlyRate,
             pauseCount: pauseCount,
-            resetCount: resetCount
+            resetCount: resetCount,
+            mouseDistance: mouseSummary.distance
         )
 
         if let existingIndex = dayHistory.firstIndex(where: { calendar.isDate($0.dayStart, inSameDayAs: currentDayStart) }) {
@@ -772,7 +974,12 @@ final class AppModel {
             accumulatedElapsed: accumulatedElapsed,
             runningSince: runningSince,
             pausedSince: pausedSince,
-            currentDayStart: currentDayStart
+            currentDayStart: currentDayStart,
+            mouseStoredDuration: mouseStoredSummary.duration,
+            mouseStoredDistance: mouseStoredSummary.distance,
+            activeMouseStartedAt: activeMouseSession?.startedAt,
+            activeMouseLastMovedAt: activeMouseSession?.lastMovedAt,
+            activeMouseDistance: activeMouseSession?.distance
         )
 
         guard let data = try? JSONEncoder().encode(session) else {
@@ -852,6 +1059,21 @@ final class AppModel {
         runningSince = session.runningSince
         pausedSince = session.pausedSince
         currentDayStart = session.currentDayStart
+        mouseStoredSummary = MouseSummary(
+            duration: session.mouseStoredDuration ?? 0,
+            distance: session.mouseStoredDistance ?? 0
+        )
+        if let startedAt = session.activeMouseStartedAt,
+           let lastMovedAt = session.activeMouseLastMovedAt,
+           let distance = session.activeMouseDistance {
+            activeMouseSession = ActiveMouseSession(
+                startedAt: startedAt,
+                lastMovedAt: lastMovedAt,
+                distance: distance
+            )
+        } else {
+            activeMouseSession = nil
+        }
     }
 
     nonisolated private static func sessionFileURL() throws -> URL {
@@ -880,6 +1102,39 @@ final class AppModel {
             .currency(code: currencyCode)
                 .precision(.fractionLength(2))
         )
+    }
+
+    nonisolated static func formatDistance(_ distance: Double) -> String {
+        let safeMillimeters = max(0, distance)
+        let feet = safeMillimeters / 304.8
+        if feet >= 1_000 {
+            let miles = feet / 5_280
+            if miles >= 10 {
+                return String(format: "%.1f mi", miles)
+            }
+            return String(format: "%.2f mi", miles)
+        }
+        if feet >= 100 {
+            return String(format: "%.0f ft", feet)
+        }
+        if feet >= 10 {
+            return String(format: "%.1f ft", feet)
+        }
+        return String(format: "%.2f ft", feet)
+    }
+
+    nonisolated static func formatCompactCount(_ value: Int) -> String {
+        let safeValue = max(0, value)
+        switch safeValue {
+        case 1_000_000...:
+            let millions = Double(safeValue) / 1_000_000
+            return String(format: millions >= 10 ? "%.0fM" : "%.1fM", millions)
+        case 1_000...:
+            let thousands = Double(safeValue) / 1_000
+            return String(format: thousands >= 10 ? "%.0fk" : "%.1fk", thousands)
+        default:
+            return "\(safeValue)"
+        }
     }
 
     private static let timestampFormatter: DateFormatter = {
@@ -939,6 +1194,7 @@ struct DailyWorkSummary: Identifiable, Codable, Equatable {
     let earningsAmount: Double
     let pauseCount: Int
     let resetCount: Int
+    let mouseDistance: Double?
 
     var id: Date { dayStart }
 
@@ -958,5 +1214,9 @@ struct DailyWorkSummary: Identifiable, Codable, Equatable {
 
     var earningsText: String {
         AppModel.formatCurrency(earningsAmount)
+    }
+
+    var mouseDistanceText: String {
+        AppModel.formatDistance(mouseDistance ?? 0)
     }
 }

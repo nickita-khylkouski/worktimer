@@ -166,6 +166,61 @@ struct AppModelTests {
         }
     }
 
+    @Test
+    func typingGraceWindowRevertsIfUserDoesNotResume() {
+        withCleanDefaults {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+            let databaseURL = root.appendingPathComponent("typing.sqlite")
+            let start = Date(timeIntervalSince1970: 6_500)
+            let context = CaptureContext(appName: "Superset", bundleIdentifier: "app.superset", sessionKey: "superset")
+            let model = AppModel(now: start, installsStatusItem: false, typingDatabaseURL: databaseURL)
+
+            model.recordTypingInput(TypingInput(context: context, mutation: .text("a")), at: start)
+            model.advance(to: start.addingTimeInterval(3))
+
+            #expect(model.isTyping == true)
+            #expect(model.typingTimeText == "0:00:03")
+
+            model.advance(to: start.addingTimeInterval(6))
+
+            #expect(model.isTyping == false)
+            #expect(model.typingTimeText == "0:00:01")
+        }
+    }
+
+    @Test
+    func mouseStatsKeepShortPausesInsideOneSessionAndStopAfterIdle() {
+        withCleanDefaults {
+            let start = Date(timeIntervalSince1970: 7_000)
+            let model = AppModel(now: start, installsStatusItem: false)
+
+            model.recordMouseMovement(
+                MouseMovementSample(pointDistance: 12, estimatedMillimeters: 25.4),
+                at: start
+            )
+            model.recordMouseMovement(
+                MouseMovementSample(pointDistance: 8, estimatedMillimeters: 12.7),
+                at: start.addingTimeInterval(1)
+            )
+
+            #expect(model.isMouseMoving == true)
+            #expect(model.mouseDistanceText == "0.12 ft")
+            #expect(model.mouseMoveTimeText == "0:00:01")
+
+            model.advance(to: start.addingTimeInterval(4))
+
+            #expect(model.isMouseMoving == false)
+            #expect(model.mouseDistanceText == "0.12 ft")
+            #expect(model.mouseMoveTimeText == "0:00:03")
+            #expect(model.mouseDistancePerMinuteText == "2.50 ft")
+
+            model.menuBarDisplayMode = .mouseDistance
+            #expect(model.topBarText == "0.12 ft")
+            #expect(abs((model.todaySummary.mouseDistance ?? 0) - 38.1) < 0.001)
+        }
+    }
+
     private func withCleanDefaults(_ body: () -> Void) {
         clearDefaults()
         body()

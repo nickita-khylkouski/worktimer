@@ -10,7 +10,6 @@ struct TimerPanelView: View {
             VStack(alignment: .leading, spacing: 10) {
                 headerCard
                 controlsRow
-                todayCard
                 typingCard
                 payCard
                 historyCard
@@ -95,20 +94,6 @@ struct TimerPanelView: View {
         }
     }
 
-    private var todayCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel("Today")
-
-            VStack(spacing: 8) {
-                StatRow(label: model.currentPhaseLabel, value: model.currentPhaseText)
-                StatRow(label: "Paused", value: model.totalPausedText)
-                StatRow(label: "Longest run", value: model.longestRunText)
-                StatRow(label: "Resets", value: "\(model.resetCount)")
-            }
-        }
-        .panelCard()
-    }
-
     private var payCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel("Pay")
@@ -173,7 +158,7 @@ struct TimerPanelView: View {
     private var typingCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                SectionLabel("Typing")
+                SectionLabel("Input")
                 Spacer()
                 Text(model.typingStatusLabel)
                     .font(.system(size: 11, weight: .semibold))
@@ -184,11 +169,49 @@ struct TimerPanelView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.56))
 
+            if model.needsTypingPermissions {
+                HStack(spacing: 8) {
+                    Button("Request Access") {
+                        model.requestTypingPermissions()
+                    }
+                    .buttonStyle(SecondaryPanelButtonStyle())
+
+                    Button("Open Settings") {
+                        model.openSystemSettings()
+                    }
+                    .buttonStyle(TextPanelButtonStyle())
+                }
+            }
+
             VStack(spacing: 8) {
                 StatRow(label: "Typing time", value: model.typingTimeText)
                 StatRow(label: "Characters", value: model.typingCharacterCountText)
                 StatRow(label: "CPM", value: model.typingCharactersPerMinuteText)
                 StatRow(label: "WPM", value: model.typingWordsPerMinuteText)
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            HStack {
+                Text("Mouse")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.56))
+                Spacer()
+                Text(model.mouseStatusLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(model.isMouseMoving ? .white : .white.opacity(0.6))
+            }
+
+            Text("Tracks how far the cursor travels across mouse moves and drags during the day.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.56))
+
+            VStack(spacing: 8) {
+                StatRow(label: "Travel", value: model.mouseDistanceText)
+                StatRow(label: "Move time", value: model.mouseMoveTimeText)
+                StatRow(label: "Travel / min", value: model.mouseDistancePerMinuteText)
             }
         }
         .panelCard()
@@ -341,7 +364,7 @@ private struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.dayTitle)
                     .font(.system(size: 12, weight: .semibold))
-                Text(summary.workedText)
+                Text("\(summary.workedText) • \(summary.mouseDistanceText)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.58))
             }

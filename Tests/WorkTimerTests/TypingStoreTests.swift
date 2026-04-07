@@ -7,7 +7,7 @@ struct TypingStoreTests {
     func insertsAndPurgesExpiredSnippets() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-        let databaseURL = root.appendingPathComponent("worktimer.sqlite")
+        let databaseURL = root.appendingPathComponent("typekeep.sqlite")
         let store = try TypingStore(databaseURL: databaseURL)
 
         let expired = CapturedSnippet(
@@ -39,7 +39,7 @@ struct TypingStoreTests {
     func summarizesTypingSessions() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-        let databaseURL = root.appendingPathComponent("worktimer.sqlite")
+        let databaseURL = root.appendingPathComponent("typekeep.sqlite")
         let store = try TypingStore(databaseURL: databaseURL)
         let context = CaptureContext(appName: "Terminal", bundleIdentifier: "com.apple.Terminal", sessionKey: "terminal")
 

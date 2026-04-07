@@ -54,3 +54,15 @@ struct TypingSummary: Equatable, Sendable {
 
     static let zero = TypingSummary(duration: 0, characterCount: 0)
 }
+
+struct MouseSummary: Equatable, Sendable {
+    let duration: TimeInterval
+    let distance: Double
+
+    static let zero = MouseSummary(duration: 0, distance: 0)
+}
+
+struct MouseMovementSample: Equatable, Sendable {
+    let pointDistance: Double
+    let estimatedMillimeters: Double
+}

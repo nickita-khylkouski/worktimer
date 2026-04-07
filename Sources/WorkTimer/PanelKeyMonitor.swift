@@ -23,6 +23,7 @@ struct PanelKeyMonitor: NSViewRepresentable {
         coordinator.detach()
     }
 
+    @MainActor
     final class Coordinator {
         var onKeyDown: (NSEvent) -> Bool
         weak var view: NSView?
