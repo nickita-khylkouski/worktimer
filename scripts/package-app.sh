@@ -9,7 +9,7 @@ ZIP_PATH="$DIST_DIR/${APP_NAME}-macOS.zip"
 NOTES_PATH="$DIST_DIR/README-SEND-TO-FRIENDS.txt"
 NOTARIZE=0
 ASC_PROFILE="${ASC_PROFILE:-Personal}"
-PACKAGE_TRUST_NOTE="This package is signed with Developer ID. If it was not notarized yet, macOS may still ask you to confirm opening it."
+PACKAGE_TRUST_NOTE=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -28,6 +28,13 @@ done
 
 "$ROOT_DIR/scripts/install-app.sh" release --no-open
 
+CODESIGN_INFO="$(codesign -dv --verbose=2 "$APP_DIR" 2>&1 || true)"
+if [[ "$CODESIGN_INFO" == *"Authority=Developer ID Application:"* ]]; then
+  PACKAGE_TRUST_NOTE="This package is Developer ID signed."
+else
+  PACKAGE_TRUST_NOTE="This package is ad hoc signed for local use only, so another Mac will usually show a stronger warning."
+fi
+
 mkdir -p "$DIST_DIR"
 rm -f "$ZIP_PATH" "$NOTES_PATH"
 
@@ -44,6 +51,8 @@ if [[ "$NOTARIZE" -eq 1 ]]; then
   xcrun stapler staple "$APP_DIR"
   ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
   PACKAGE_TRUST_NOTE="This package was notarized and the app bundle was stapled after Apple accepted the submission."
+elif [[ "$PACKAGE_TRUST_NOTE" == "This package is Developer ID signed." ]]; then
+  PACKAGE_TRUST_NOTE="This package is Developer ID signed but not notarized, so macOS may still ask the user to confirm opening it."
 fi
 
 cat > "$NOTES_PATH" <<EOF
@@ -54,8 +63,9 @@ Requirements:
 
 Install:
 1. Unzip WorkTimer-macOS.zip
-2. Drag WorkTimer.app into Applications
+2. Drag WorkTimer.app into /Applications or ~/Applications
 3. Open WorkTimer.app
+4. The setup panel should open automatically on first launch
 
 How it works:
 - The app appears in the top-right menu bar.
@@ -69,7 +79,7 @@ How it works:
 $PACKAGE_TRUST_NOTE
 
 If macOS still asks for confirmation:
-1. Move WorkTimer.app into Applications first
+1. Move WorkTimer.app into /Applications or ~/Applications first
 2. Control-click the app
 3. Choose Open
 4. Choose Open again in the confirmation dialog
@@ -86,11 +96,16 @@ Launch at login:
 - If macOS asks for approval, check System Settings > General > Login Items
 
 Permissions for typing and mouse stats:
-- Move WorkTimer.app into Applications before granting permissions
+- Move WorkTimer.app into /Applications or ~/Applications before granting permissions
 - System Settings > Privacy & Security > Accessibility
 - System Settings > Privacy & Security > Input Monitoring
 - Turn on WorkTimer in both places
-- Quit and reopen WorkTimer once after enabling both switches
+- If setup looks stuck, quit and reopen WorkTimer once after enabling both switches
+
+If typing or mouse access still does not start:
+1. Remove WorkTimer from both privacy panes
+2. Reopen WorkTimer
+3. Use the in-app Setup card and press Grant Access again
 EOF
 
 echo "Created $ZIP_PATH"

@@ -88,6 +88,7 @@ Installed ${APP_DIR}
 What to expect:
 - WorkTimer launches as a menu bar app and should appear at the top-right of the screen.
 - WorkTimer now also appears in the Dock while running.
+- The setup panel should open automatically on first launch.
 - Single click pauses or resumes.
 - Double click opens the panel.
 - Right click opens the panel.
@@ -103,4 +104,5 @@ Helpful commands:
 - Open permissions panes: ./scripts/open-permissions.sh
 - Reset permissions cleanly: ./scripts/reset-permissions.sh
 - Relaunch app: ./scripts/open-app.sh
+- Inspect trust + install state: ./scripts/doctor.sh
 EOF

@@ -1,34 +1,42 @@
+import AppKit
 import SwiftUI
 
 struct TimerPanelView: View {
     @Bindable var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hourlyRateInput = ""
     @State private var workedTimeDigits = ""
     @State private var isEditingWorkedTime = false
+    @State private var inputExpanded = true
+    @State private var aiExpanded = false
+    @State private var diskExpanded = false
+    @State private var historyExpanded = true
+    @State private var logExpanded = false
     @FocusState private var hourlyRateFieldFocused: Bool
     @FocusState private var workedTimeFieldFocused: Bool
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 headerCard
-                payCard
+                controlsRow
                 if model.shouldShowOnboardingCard {
                     onboardingCard
                 }
                 topBarCard
-                controlsRow
+                payCard
                 typingCard
                 aiCard
                 diskCard
                 historyCard
                 logCard
             }
-            .padding(12)
+            .padding(14)
         }
-        .frame(width: 332, height: 438, alignment: .topLeading)
-        .background(Color.black)
-        .foregroundStyle(.white)
+        .frame(minWidth: 344, idealWidth: 368, maxWidth: 440, minHeight: 420, idealHeight: 520, maxHeight: 760, alignment: .topLeading)
+        .background(theme.windowBackground)
+        .foregroundStyle(theme.primary)
+        .preferredColorScheme(model.preferredColorScheme)
         .scrollIndicators(.visible)
         .onAppear {
             syncHourlyRateInput()
@@ -68,35 +76,35 @@ struct TimerPanelView: View {
                 SectionLabel("Setup")
                 Spacer()
                 Text(model.onboardingStatusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.secondary)
                 Button("Hide") {
                     model.dismissOnboarding()
                 }
-                .buttonStyle(TextPanelButtonStyle())
+                .buttonStyle(TextPanelButtonStyle(theme: theme))
             }
 
             Text("New users should follow this once: move the app into Applications, grant access from here, then confirm login-item approval if macOS asks.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.56))
+                .font(.caption)
+                .foregroundStyle(theme.secondary)
 
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(model.onboardingChecklist.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .top, spacing: 8) {
                         Text(item.complete ? "Done" : "Next")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(item.complete ? .black : .white)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(item.complete ? theme.inversePrimary : theme.primary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
-                            .background(item.complete ? Color.white : Color.white.opacity(0.08))
+                            .background(item.complete ? theme.accent : theme.mutedFill)
                             .clipShape(Capsule())
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.subheadline.weight(.semibold))
                             Text(item.detail)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.56))
+                                .font(.caption)
+                                .foregroundStyle(theme.secondary)
                         }
                     }
                 }
@@ -107,25 +115,25 @@ struct TimerPanelView: View {
                     Button("Applications") {
                         model.openApplicationsFolder()
                     }
-                    .buttonStyle(SecondaryPanelButtonStyle())
+                    .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
                 }
 
                 if model.needsTypingPermissions {
                     Button("Grant Access") {
                         model.requestTypingPermissions()
                     }
-                    .buttonStyle(SecondaryPanelButtonStyle())
+                    .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
                 }
 
                 if model.launchAtLoginStatus != .enabled {
                     Button("Login Items") {
                         model.openLoginItemsSettings()
                     }
-                    .buttonStyle(TextPanelButtonStyle())
+                    .buttonStyle(TextPanelButtonStyle(theme: theme))
                 }
             }
         }
-        .panelCard()
+        .panelCard(theme: theme)
     }
 
     private var headerCard: some View {
@@ -133,12 +141,12 @@ struct TimerPanelView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("WorkTimer")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.56))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(theme.secondary)
 
                     HStack(alignment: .center, spacing: 8) {
                         Text(model.elapsedText)
-                            .font(.system(size: 26, weight: .bold, design: .monospaced))
+                            .font(.system(size: 28, weight: .bold, design: .monospaced))
                             .lineLimit(1)
                             .minimumScaleFactor(0.72)
 
@@ -147,17 +155,16 @@ struct TimerPanelView: View {
                         } label: {
                             Image(systemName: "square.and.pencil")
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(isEditingWorkedTime ? .black : .white.opacity(0.82))
+                                .foregroundStyle(isEditingWorkedTime ? theme.accent : theme.secondary)
                                 .frame(width: 24, height: 24)
-                                .background(isEditingWorkedTime ? Color.white : Color.white.opacity(0.06))
+                                .background(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .fill(isEditingWorkedTime ? theme.accent.opacity(0.14) : theme.cardFill)
+                                )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .stroke(
-                                            isEditingWorkedTime ? Color.white : Color.white.opacity(0.08),
-                                            lineWidth: 1
-                                        )
+                                        .stroke(isEditingWorkedTime ? theme.accent : theme.stroke, lineWidth: 1)
                                 )
-                                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
@@ -165,7 +172,7 @@ struct TimerPanelView: View {
                     if isEditingWorkedTime {
                         HStack(spacing: 8) {
                             TextField("h:mm:ss", text: workedTimeInput)
-                                .textFieldStyle(.plain)
+                                .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                                 .focused($workedTimeFieldFocused)
                                 .onSubmit {
@@ -175,27 +182,30 @@ struct TimerPanelView: View {
                             Button("Set") {
                                 saveWorkedTimeEdit()
                             }
-                            .buttonStyle(MiniPanelButtonStyle())
+                            .buttonStyle(MiniPanelButtonStyle(theme: theme))
                         }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 7)
-                        .background(Color.white.opacity(0.045))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
                 }
 
                 Spacer(minLength: 8)
 
-                Button {
-                    model.resetTimer()
-                } label: {
-                    Text("Reset")
+                HStack(spacing: 6) {
+                    Button {
+                        model.appearanceMode = nextAppearanceMode(after: model.appearanceMode)
+                    } label: {
+                        Image(systemName: appearanceSymbol)
+                    }
+                    .buttonStyle(IconPanelButtonStyle(theme: theme))
+                    .help("Switch appearance")
+
+                    Button {
+                        model.resetTimer()
+                    } label: {
+                        Text("Reset")
+                    }
+                    .buttonStyle(MiniPanelButtonStyle(theme: theme))
+                    .keyboardShortcut("r", modifiers: [.command])
                 }
-                .buttonStyle(MiniPanelButtonStyle())
             }
 
             HStack(spacing: 8) {
@@ -204,7 +214,7 @@ struct TimerPanelView: View {
                 CompactMetric(label: "Pay", value: model.currentEarningsText)
             }
         }
-        .panelCard()
+        .panelCard(theme: theme)
     }
 
     private var controlsRow: some View {
@@ -212,19 +222,21 @@ struct TimerPanelView: View {
             Button(model.isRunning ? "Pause" : "Resume") {
                 model.toggleRunning()
             }
-            .buttonStyle(PrimaryPanelButtonStyle())
+            .buttonStyle(PrimaryPanelButtonStyle(theme: theme))
+            .keyboardShortcut("p", modifiers: [.command])
 
             Button("Hide") {
                 model.hideControlPanel()
             }
-            .buttonStyle(SecondaryPanelButtonStyle())
+            .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
 
             Spacer(minLength: 0)
 
             Button("Copy") {
                 model.copySummary()
             }
-            .buttonStyle(TextPanelButtonStyle())
+            .buttonStyle(TextPanelButtonStyle(theme: theme))
+            .keyboardShortcut("c", modifiers: [.command])
         }
     }
 
@@ -234,16 +246,16 @@ struct TimerPanelView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Per hour")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.56))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.secondary)
 
                 HStack(spacing: 6) {
                     Text("$")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(theme.secondary)
 
                     TextField("0", text: $hourlyRateInput)
-                        .textFieldStyle(.plain)
+                        .textFieldStyle(.roundedBorder)
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .focused($hourlyRateFieldFocused)
                         .onChange(of: hourlyRateInput) { _, newValue in
@@ -256,34 +268,60 @@ struct TimerPanelView: View {
                             commitHourlyRateInput()
                         }
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(Color.white.opacity(0.045))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         }
-        .panelCard()
+        .panelCard(theme: theme)
     }
 
     private var topBarCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel("Top bar")
 
-            LazyVGrid(columns: topBarModeColumns, spacing: 8) {
+            Menu {
                 ForEach(AppModel.MenuBarDisplayMode.allCases, id: \.self) { mode in
                     Button {
                         model.menuBarDisplayMode = mode
                     } label: {
-                        Text(mode.title)
-                            .frame(maxWidth: .infinity)
+                        HStack {
+                            Text(mode.title)
+                            if model.menuBarDisplayMode == mode {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
                     }
-                    .buttonStyle(TopBarModeButtonStyle(isSelected: model.menuBarDisplayMode == mode))
                 }
+            } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show in menu bar")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(theme.secondary)
+                        Text(model.menuBarDisplayMode.title)
+                            .font(.system(size: 17, weight: .bold, design: .default))
+                            .foregroundStyle(theme.primary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(theme.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(theme.cardFill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(theme.stroke, lineWidth: 1)
+                )
             }
+            .menuStyle(.borderlessButton)
+
+            Divider()
 
             StatRow(label: "Preview", value: model.topBarText)
                 .padding(.top, 2)
@@ -297,168 +335,132 @@ struct TimerPanelView: View {
                 .padding(.top, 2)
             }
         }
-        .panelCard()
+        .panelCard(theme: theme)
     }
 
     private var aiCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel("AI Usage")
-                Spacer()
-                Text(model.aiStatusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(model.aiUsageAvailable ? .white : .white.opacity(0.56))
-            }
+        ExpandablePanel(isExpanded: $aiExpanded) {
+                cardHeader(title: "AI Usage", status: model.aiStatusLabel, emphasized: model.aiUsageAvailable, isExpanded: aiExpanded)
+        } content: {
+                Text(
+                    model.aiUsageAvailable
+                        ? "Live Codex and Claude usage pulled from local usage snapshots and session logs."
+                        : "AI usage is unavailable until WorkTimer can find the local usage-data snapshots and session folders."
+                )
+                .font(.caption)
+                .foregroundStyle(theme.secondary)
 
-            Text(
-                model.aiUsageAvailable
-                    ? "Live Codex and Claude usage pulled from local usage snapshots and session logs."
-                    : "AI usage is unavailable until WorkTimer can find the local usage-data snapshots and session folders."
-            )
-            .font(.system(size: 11))
-            .foregroundStyle(.white.opacity(0.56))
-
-            VStack(spacing: 8) {
-                StatRow(label: "Combined", value: model.aiCombinedTokensText)
-                StatRow(label: "Today", value: model.aiTodayTokensText)
-                StatRow(label: "Rate", value: model.aiTokensPerSecondText)
-                StatRow(label: "Codex", value: model.aiCodexTokensText)
-                StatRow(label: "Claude", value: model.aiClaudeTokensText)
-                StatRow(label: "Watched files", value: model.aiWatchedFilesText)
-            }
+                VStack(spacing: 8) {
+                    StatRow(label: "Combined", value: model.aiCombinedTokensText)
+                    StatRow(label: "Today", value: model.aiTodayTokensText)
+                    StatRow(label: "Rate", value: model.aiTokensPerSecondText)
+                    StatRow(label: "Codex", value: model.aiCodexTokensText)
+                    StatRow(label: "Claude", value: model.aiClaudeTokensText)
+                    StatRow(label: "Watched files", value: model.aiWatchedFilesText)
+                }
+                .padding(.top, 6)
         }
-        .panelCard()
     }
 
     private var diskCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel("Disk")
-                Spacer()
-                Text(model.diskStatusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(model.diskHealthAvailable ? .white : .white.opacity(0.56))
-            }
+        ExpandablePanel(isExpanded: $diskExpanded) {
+            cardHeader(title: "Disk", status: model.diskStatusLabel, emphasized: model.diskHealthAvailable, isExpanded: diskExpanded)
+        } content: {
+                Text(
+                    model.diskHealthAvailable
+                        ? "Internal SSD counters from diskutil SMART fields."
+                        : "Disk counters are unavailable on this Mac right now."
+                )
+                .font(.caption)
+                .foregroundStyle(theme.secondary)
 
-            Text(
-                model.diskHealthAvailable
-                    ? "Internal SSD counters from diskutil SMART fields."
-                    : "Disk counters are unavailable on this Mac right now."
-            )
-            .font(.system(size: 11))
-            .foregroundStyle(.white.opacity(0.56))
-
-            VStack(spacing: 8) {
-                StatRow(label: "Read", value: model.diskReadText)
-                StatRow(label: "Written", value: model.diskWrittenText)
-                StatRow(label: "Read cmds", value: model.diskHostReadCommandsText)
-                StatRow(label: "Write cmds", value: model.diskHostWriteCommandsText)
-                StatRow(label: "Wear", value: model.diskWearText)
-                StatRow(label: "Power on", value: model.diskPowerOnText)
-            }
+                VStack(spacing: 8) {
+                    StatRow(label: "Read", value: model.diskReadText)
+                    StatRow(label: "Written", value: model.diskWrittenText)
+                    StatRow(label: "Read cmds", value: model.diskHostReadCommandsText)
+                    StatRow(label: "Write cmds", value: model.diskHostWriteCommandsText)
+                    StatRow(label: "Wear", value: model.diskWearText)
+                    StatRow(label: "Power on", value: model.diskPowerOnText)
+                }
+                .padding(.top, 6)
         }
-        .panelCard()
     }
 
     private var typingCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel("Input")
-                Spacer()
-                Text(model.typingStatusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(model.isTyping ? .white : .white.opacity(0.6))
-            }
+        ExpandablePanel(isExpanded: $inputExpanded) {
+            cardHeader(title: "Input", status: model.typingStatusLabel, emphasized: model.isTyping, isExpanded: inputExpanded)
+        } content: {
+                Text(model.typingStatusDetail)
+                    .font(.caption)
+                    .foregroundStyle(theme.secondary)
 
-            Text(model.typingStatusDetail)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.56))
-
-            if !model.isInstalledInApplications {
-                Button("Open Applications Folder") {
-                    model.openApplicationsFolder()
-                }
-                .buttonStyle(SecondaryPanelButtonStyle())
-            }
-
-            if model.needsTypingPermissions {
-                HStack(spacing: 8) {
-                    Button("Request + Open Settings") {
-                        model.requestTypingPermissions()
+                if !model.isInstalledInApplications {
+                    Button("Open Applications Folder") {
+                        model.openApplicationsFolder()
                     }
-                    .buttonStyle(SecondaryPanelButtonStyle())
-
-                    Button("Open Both Panes") {
-                        model.openTypingPermissionPanes()
-                    }
-                    .buttonStyle(TextPanelButtonStyle())
+                    .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
                 }
 
-                Text("WorkTimer retries automatically. If stats still do not start after a few seconds, reopen the app once.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.46))
-            }
+                if model.needsTypingPermissions {
+                    HStack(spacing: 8) {
+                        Button("Request + Open Settings") {
+                            model.requestTypingPermissions()
+                        }
+                        .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
 
-            VStack(spacing: 8) {
-                StatRow(label: "Typing time", value: model.typingTimeText)
-                StatRow(label: "Characters", value: model.typingCharacterCountText)
-                StatRow(label: "CPM", value: model.typingCharactersPerMinuteText)
-                StatRow(label: "WPM", value: model.typingWordsPerMinuteText)
-            }
+                        Button("Open Both Panes") {
+                            model.openTypingPermissionPanes()
+                        }
+                        .buttonStyle(TextPanelButtonStyle(theme: theme))
+                    }
 
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
+                    Text("WorkTimer retries automatically. If stats still do not start after a few seconds, reopen the app once.")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondary)
+                }
 
-            HStack {
-                Text("Mouse")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.56))
-                Spacer()
-                Text(model.mouseStatusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(model.isMouseMoving ? .white : .white.opacity(0.6))
-            }
+                VStack(spacing: 8) {
+                    StatRow(label: "Typing time", value: model.typingTimeText)
+                    StatRow(label: "Characters", value: model.typingCharacterCountText)
+                    StatRow(label: "CPM", value: model.typingCharactersPerMinuteText)
+                    StatRow(label: "WPM", value: model.typingWordsPerMinuteText)
+                }
+                .padding(.top, 4)
 
-            Text("Tracks how far the cursor travels across mouse moves and drags during the day.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.56))
+                Divider()
 
-            VStack(spacing: 8) {
-                StatRow(label: "Travel", value: model.mouseDistanceText)
-                StatRow(label: "Move time", value: model.mouseMoveTimeText)
-                StatRow(label: "Travel / min", value: model.mouseDistancePerMinuteText)
-            }
+                Group {
+                    subSectionHeader(title: "Mouse", status: model.mouseStatusLabel, emphasized: model.isMouseMoving)
+                    Text("Tracks how far the cursor travels across mouse moves and drags during the day.")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondary)
 
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
+                    VStack(spacing: 8) {
+                        StatRow(label: "Travel", value: model.mouseDistanceText)
+                        StatRow(label: "Move time", value: model.mouseMoveTimeText)
+                        StatRow(label: "Travel / min", value: model.mouseDistancePerMinuteText)
+                    }
+                }
 
-            HStack {
-                Text("Wispr Flow")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.56))
-                Spacer()
-                Text(model.wisprFlowStatusLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(model.wisprFlowAvailable ? .white : .white.opacity(0.6))
-            }
+                Divider()
 
-            Text(
-                model.wisprFlowAvailable
-                    ? "Reads today’s dictation totals from the local Wispr Flow history database."
-                    : "Wispr Flow stats show up automatically when a local flow.sqlite database is available."
-            )
-            .font(.system(size: 11))
-            .foregroundStyle(.white.opacity(0.56))
+                Group {
+                    subSectionHeader(title: "Wispr Flow", status: model.wisprFlowStatusLabel, emphasized: model.wisprFlowAvailable)
+                    Text(
+                        model.wisprFlowAvailable
+                            ? "Reads today’s dictation totals from the local Wispr Flow history database."
+                            : "Wispr Flow stats show up automatically when a local flow.sqlite database is available."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(theme.secondary)
 
-            VStack(spacing: 8) {
-                StatRow(label: "Words today", value: model.wisprWordsTodayText)
-                StatRow(label: "Dictation time", value: model.wisprDictationDurationTodayText)
-                StatRow(label: "Clips today", value: model.wisprClipsTodayText)
-            }
+                    VStack(spacing: 8) {
+                        StatRow(label: "Words today", value: model.wisprWordsTodayText)
+                        StatRow(label: "Dictation time", value: model.wisprDictationDurationTodayText)
+                        StatRow(label: "Clips today", value: model.wisprClipsTodayText)
+                    }
+                }
         }
-        .panelCard()
     }
 
     private func syncHourlyRateInput() {
@@ -594,77 +596,234 @@ struct TimerPanelView: View {
         return formatter
     }()
 
-    private var topBarModeColumns: [GridItem] {
-        [
-            GridItem(.flexible(), spacing: 8),
-            GridItem(.flexible(), spacing: 8),
-            GridItem(.flexible(), spacing: 8),
-        ]
-    }
-
     private var historyCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel("Daily Log")
-                Spacer()
-                Text("Auto resets each day")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.42))
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(model.dailySummaries) { summary in
-                        HistoryRow(summary: summary)
-                    }
-                }
-            }
-            .frame(maxHeight: 150)
-        }
-        .panelCard()
-    }
-
-    private var logCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel("Actions")
-                Spacer()
-                Button("Clear") {
-                    model.clearLog()
-                }
-                .buttonStyle(TextPanelButtonStyle())
-                .disabled(model.logEntries.isEmpty)
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if model.logEntries.isEmpty {
-                        Text("Pause, resume, or reset to add entries.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.56))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ForEach(model.logEntries) { entry in
-                            SimpleLogRow(entry: entry)
+        ExpandablePanel(isExpanded: $historyExpanded) {
+            cardHeader(title: "Daily Log", status: "Auto resets each day", emphasized: false, isExpanded: historyExpanded)
+        } content: {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.dailySummaries) { summary in
+                            Button {
+                                model.openDailySummary(summary)
+                            } label: {
+                                HistoryRow(summary: summary)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
-            }
-            .frame(maxHeight: 112)
+                .frame(maxHeight: 150)
         }
-        .panelCard()
     }
+
+    private var logCard: some View {
+        ExpandablePanel(isExpanded: $logExpanded) {
+            cardHeader(title: "Actions", status: "\(model.logEntries.count) entries", emphasized: false, isExpanded: logExpanded)
+        } content: {
+                HStack {
+                    Spacer()
+                    Button("Clear") {
+                        model.clearLog()
+                    }
+                    .buttonStyle(TextPanelButtonStyle(theme: theme))
+                    .disabled(model.logEntries.isEmpty)
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if model.logEntries.isEmpty {
+                            Text("Pause, resume, or reset to add entries.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ForEach(model.logEntries) { entry in
+                                SimpleLogRow(entry: entry)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 112)
+        }
+    }
+
+    @ViewBuilder
+    private func cardHeader(title: String, status: String, emphasized: Bool, isExpanded: Bool) -> some View {
+        HStack {
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondary)
+            SectionLabel(title)
+            Spacer()
+            Text(status)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(emphasized ? theme.primary : theme.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func subSectionHeader(title: String, status: String, emphasized: Bool) -> some View {
+        HStack {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondary)
+            Spacer()
+            Text(status)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(emphasized ? theme.primary : theme.secondary)
+        }
+    }
+
+    private var appearanceSymbol: String {
+        switch model.appearanceMode {
+        case .system:
+            return "circle.lefthalf.filled"
+        case .light:
+            return "sun.max.fill"
+        case .dark:
+            return "moon.fill"
+        }
+    }
+
+    private func nextAppearanceMode(after mode: AppModel.AppearanceMode) -> AppModel.AppearanceMode {
+        switch mode {
+        case .system:
+            return .light
+        case .light:
+            return .dark
+        case .dark:
+            return .system
+        }
+    }
+
+    private var theme: PanelTheme {
+        PanelTheme(colorScheme: colorScheme)
+    }
+}
+
+struct DailySummaryPanelView: View {
+    @Bindable var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if let summary = model.selectedDailySummary {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(summary.dayTitle)
+                                .font(.title2.weight(.bold))
+                            Text(summary.dayStart.formatted(date: .complete, time: .omitted))
+                                .font(.caption)
+                                .foregroundStyle(theme.secondary)
+                        }
+
+                        dayCard(title: "Work") {
+                            detailRow("Worked", summary.workedText)
+                            detailRow("Pay", summary.earningsText)
+                            detailRow("Hourly", summary.hourlyRateText)
+                            detailRow("Paused", summary.pausedText)
+                            detailRow("Longest run", summary.longestRunText)
+                            detailRow("Active share", summary.activeShareText)
+                            detailRow("Pauses", "\(summary.pauseCount)")
+                            detailRow("Resets", "\(summary.resetCount)")
+                        }
+
+                        dayCard(title: "Input") {
+                            detailRow("Typing time", summary.typingTimeText)
+                            detailRow("Characters", summary.typingCharacterCountText)
+                            detailRow("WPM", summary.typingWordsPerMinuteText)
+                            detailRow("Mouse travel", summary.mouseDistanceText)
+                            detailRow("Mouse time", summary.mouseMoveTimeText)
+                        }
+
+                        dayCard(title: "Wispr Flow") {
+                            detailRow("Words", summary.wisprWordsTodayText)
+                            detailRow("Dictation", summary.wisprDictationTimeText)
+                            detailRow("Clips", summary.wisprClipsTodayText)
+                        }
+
+                        HStack {
+                            Spacer()
+                            Button("Close") {
+                                model.hideDailySummary()
+                            }
+                            .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
+                        }
+                    }
+                    .padding(14)
+                }
+                .background(theme.windowBackground)
+                .foregroundStyle(theme.primary)
+            } else {
+                VStack(spacing: 10) {
+                    Text("No day selected")
+                        .font(.headline)
+                    Button("Close") {
+                        model.hideDailySummary()
+                    }
+                    .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(theme.windowBackground)
+                .foregroundStyle(theme.primary)
+            }
+        }
+        .frame(minWidth: 390, idealWidth: 430, minHeight: 460, idealHeight: 560, maxHeight: .infinity, alignment: .topLeading)
+        .preferredColorScheme(model.preferredColorScheme)
+    }
+
+    private func dayCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.secondary)
+            content()
+        }
+        .panelCard(theme: theme)
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(theme.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(theme.primary)
+        }
+    }
+
+    private var theme: PanelTheme {
+        PanelTheme(colorScheme: colorScheme)
+    }
+}
+
+private struct PanelTheme {
+    let colorScheme: ColorScheme
+
+    var windowBackground: Color { colorScheme == .dark ? .black : .white }
+    var primary: Color { colorScheme == .dark ? .white : .black }
+    var secondary: Color { colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66) }
+    var tertiary: Color { colorScheme == .dark ? Color.white.opacity(0.5) : Color.black.opacity(0.45) }
+    var cardFill: Color { colorScheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05) }
+    var mutedFill: Color { colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.1) }
+    var stroke: Color { colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.14) }
+    var accent: Color { colorScheme == .dark ? .white : .black }
+    var inversePrimary: Color { colorScheme == .dark ? .black : .white }
 }
 
 private struct CompactMetric: View {
     let label: String
     let value: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.46))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
             Text(value)
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
@@ -677,12 +836,13 @@ private struct CompactMetric: View {
 private struct StatRow: View {
     let label: String
     let value: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.72))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
 
             Spacer(minLength: 8)
 
@@ -696,15 +856,16 @@ private struct StatRow: View {
 
 private struct HistoryRow: View {
     let summary: DailyWorkSummary
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.dayTitle)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                 Text("\(summary.workedText) • \(summary.mouseDistanceText)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.58))
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
             }
 
             Spacer(minLength: 8)
@@ -714,23 +875,26 @@ private struct HistoryRow: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 8)
-        .background(Color.white.opacity(0.04))
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.04))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                .stroke(colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.14), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }
 
 private struct SimpleLogRow: View {
     let entry: TimerLogEntry
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(entry.title.uppercased())
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white.opacity(0.68))
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
                 .frame(width: 52, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -738,7 +902,7 @@ private struct SimpleLogRow: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 Text("Timer \(AppModel.formatElapsed(entry.elapsedSnapshot))")
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.48))
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
             }
 
             Spacer()
@@ -749,6 +913,7 @@ private struct SimpleLogRow: View {
 
 private struct SectionLabel: View {
     let text: String
+    @Environment(\.colorScheme) private var colorScheme
 
     init(_ text: String) {
         self.text = text
@@ -756,87 +921,139 @@ private struct SectionLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.56))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
     }
 }
 
 private struct PrimaryPanelButtonStyle: ButtonStyle {
+    let theme: PanelTheme
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.black)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(theme.inversePrimary)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(configuration.isPressed ? Color.white.opacity(0.82) : Color.white)
+            .background(configuration.isPressed ? theme.accent.opacity(0.82) : theme.accent)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
 private struct SecondaryPanelButtonStyle: ButtonStyle {
+    let theme: PanelTheme
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(theme.primary)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(configuration.isPressed ? Color.white.opacity(0.12) : Color.white.opacity(0.06))
+            .background(configuration.isPressed ? theme.mutedFill : theme.cardFill)
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(theme.stroke, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
 private struct MiniPanelButtonStyle: ButtonStyle {
+    let theme: PanelTheme
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(theme.primary)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(configuration.isPressed ? Color.white.opacity(0.14) : Color.white.opacity(0.06))
+            .background(configuration.isPressed ? theme.mutedFill : theme.cardFill)
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(theme.stroke, lineWidth: 1)
             )
-            .clipShape(Capsule())
     }
 }
 
 private struct TextPanelButtonStyle: ButtonStyle {
+    let theme: PanelTheme
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(configuration.isPressed ? .white.opacity(0.68) : .white.opacity(0.84))
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(configuration.isPressed ? theme.accent.opacity(0.72) : theme.accent)
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
     }
 }
 
-private struct TopBarModeButtonStyle: ButtonStyle {
+private struct SelectionChipButtonStyle: ButtonStyle {
+    let theme: PanelTheme
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(isSelected ? .black : .white)
-            .padding(.horizontal, 8)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(isSelected ? theme.inversePrimary : theme.primary)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(backgroundColor(configuration: configuration))
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(
+                        isSelected
+                            ? theme.accent.opacity(configuration.isPressed ? 0.82 : 1)
+                            : theme.cardFill.opacity(configuration.isPressed ? 0.85 : 1)
+                    )
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? Color.white : Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(isSelected ? theme.accent : theme.stroke, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
+}
 
-    private func backgroundColor(configuration: Configuration) -> Color {
-        if configuration.isPressed {
-            return isSelected ? Color.white.opacity(0.82) : Color.white.opacity(0.14)
+private struct IconPanelButtonStyle: ButtonStyle {
+    let theme: PanelTheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(theme.primary)
+            .frame(width: 28, height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(configuration.isPressed ? theme.mutedFill : theme.cardFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(theme.stroke, lineWidth: 1)
+            )
+    }
+}
+
+private struct ExpandablePanel<Header: View, Content: View>: View {
+    @Binding var isExpanded: Bool
+    @ViewBuilder let header: () -> Header
+    @ViewBuilder let content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                header()
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                content()
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        return isSelected ? .white : Color.white.opacity(0.05)
+        .panelCard(theme: PanelTheme(colorScheme: colorScheme))
     }
 }
 
@@ -844,6 +1061,7 @@ private struct AIRateSparkline: View {
     let values: [Double]
     let trailingLabel: String
     @State private var hoveredIndex: Int?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { geometry in
@@ -857,7 +1075,7 @@ private struct AIRateSparkline: View {
 
             ZStack(alignment: .bottomLeading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05))
 
                 if let hoveredIndex,
                    hoveredIndex < points.count {
@@ -868,12 +1086,12 @@ private struct AIRateSparkline: View {
                         path.addLine(to: CGPoint(x: hoveredPoint.x, y: geometry.size.height - 8))
                     }
                     .stroke(
-                        Color.white.opacity(0.34),
+                        colorScheme == .dark ? Color.white.opacity(0.4) : Color.black.opacity(0.35),
                         style: StrokeStyle(lineWidth: 1, dash: [3, 3])
                     )
 
                     Circle()
-                        .fill(Color.white)
+                        .fill(colorScheme == .dark ? Color.white : Color.black)
                         .frame(width: 6, height: 6)
                         .position(hoveredPoint)
                 }
@@ -892,7 +1110,10 @@ private struct AIRateSparkline: View {
                 }
                 .fill(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.22), Color.white.opacity(0.02)],
+                        colors: [
+                            (colorScheme == .dark ? Color.white : Color.black).opacity(0.18),
+                            (colorScheme == .dark ? Color.white : Color.black).opacity(0.03),
+                        ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
@@ -905,7 +1126,7 @@ private struct AIRateSparkline: View {
                         path.addLine(to: point)
                     }
                 }
-                .stroke(Color.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                .stroke(colorScheme == .dark ? Color.white : Color.black, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
 
                 if let hoveredIndex,
                    hoveredIndex < values.count {
@@ -921,7 +1142,7 @@ private struct AIRateSparkline: View {
                     Text(trailingLabel)
                 }
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.34))
+                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
                 .padding(.horizontal, 8)
                 .padding(.bottom, 4)
             }
@@ -942,15 +1163,19 @@ private struct AIRateSparkline: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("\(AppModel.formatTokensPerSecond(values[index]))/s")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.black)
+                .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
             Text(relativeTimeText(for: index, count: values.count))
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.black.opacity(0.72))
+                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.66))
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 5)
-        .background(Color.white.opacity(0.96))
+        .background(colorScheme == .dark ? Color.black.opacity(0.96) : Color.white.opacity(0.98))
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.14), lineWidth: 1)
+        )
     }
 
     private func xPosition(for index: Int, width: CGFloat, count: Int) -> CGFloat {
@@ -1009,15 +1234,17 @@ private struct AIRateSparkline: View {
 }
 
 private extension View {
-    func panelCard() -> some View {
+    func panelCard(theme: PanelTheme) -> some View {
         self
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(Color.white.opacity(0.035))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(theme.cardFill)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(theme.stroke, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

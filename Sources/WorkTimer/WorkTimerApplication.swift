@@ -19,6 +19,9 @@ final class WorkTimerApplicationDelegate: NSObject, NSApplicationDelegate {
         model.installRecoveryPanel {
             TimerPanelView(model: model)
         }
+        model.installDailyDetailPanel {
+            DailySummaryPanelView(model: model)
+        }
         model.startIfNeeded()
         LaunchAtLoginManager.ensureEnabled()
     }

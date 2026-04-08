@@ -9,6 +9,6 @@ Opened:
 - Accessibility
 - Input Monitoring
 
-Enable WorkTimer in both panes, then relaunch if macOS does not resume capture automatically:
+Enable WorkTimer in both panes. WorkTimer retries automatically, but if stats still do not start after a few seconds, relaunch:
 open -na ~/Applications/WorkTimer.app
 EOF

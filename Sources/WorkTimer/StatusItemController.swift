@@ -18,6 +18,7 @@ final class StatusItemController: NSObject {
     private var pendingLeftClickWorkItem: DispatchWorkItem?
     private var lastLeftClickTimestamp: TimeInterval?
     private var lastCommittedLeftClickTimestamp: TimeInterval?
+    private var lastRightClickTimestamp: TimeInterval?
 
     override init() {
         super.init()
@@ -59,7 +60,7 @@ final class StatusItemController: NSObject {
         let width = textWidth(for: displayText, font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium))
         statusItem.length = max(64, width + 14)
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        let textColor = isRunning ? NSColor.labelColor : NSColor.systemRed
+        let textColor = isRunning ? NSColor.white : NSColor.systemRed
         button.font = nil
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
@@ -74,7 +75,7 @@ final class StatusItemController: NSObject {
     @objc
     private func handleButtonAction() {
         guard let event = NSApp.currentEvent else {
-            onLeftClick?()
+            DebugTrace.log("StatusItemController ignored action with nil currentEvent")
             return
         }
 
@@ -82,6 +83,7 @@ final class StatusItemController: NSObject {
         case .rightMouseDown, .rightMouseUp:
             DebugTrace.log("StatusItemController handleRightClick type=\(event.type.rawValue) timestamp=\(event.timestamp)")
             cancelPendingLeftClick()
+            lastRightClickTimestamp = event.timestamp
             onRightClick?()
         case .leftMouseUp:
             DebugTrace.log("StatusItemController handleLeftClick clickCount=\(event.clickCount) timestamp=\(event.timestamp)")
@@ -93,6 +95,13 @@ final class StatusItemController: NSObject {
 
     private func handleLeftMouseUp(_ event: NSEvent) {
         let forgivingDoubleClickInterval = min(max(NSEvent.doubleClickInterval * 0.55, 0.18), 0.28)
+
+        if let lastRightClickTimestamp,
+           (event.timestamp - lastRightClickTimestamp) < 0.5
+        {
+            DebugTrace.log("StatusItemController suppressed left click after right click")
+            return
+        }
 
         if let lastCommittedLeftClickTimestamp,
            (event.timestamp - lastCommittedLeftClickTimestamp) < 0.35
@@ -140,7 +149,7 @@ final class StatusItemController: NSObject {
         DebugTrace.log("StatusItemController configureButton button-ok")
         button.target = self
         button.action = #selector(handleButtonAction)
-        button.sendAction(on: [.leftMouseUp, .rightMouseDown, .rightMouseUp])
+        button.sendAction(on: [.leftMouseUp, .rightMouseDown])
     }
 
     private func textWidth(for text: String, font: NSFont) -> CGFloat {

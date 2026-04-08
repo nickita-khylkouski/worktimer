@@ -1,11 +1,18 @@
 #!/bin/zsh
 set -euo pipefail
 
-APP_DIR="$HOME/Applications/WorkTimer.app"
+APP_DIRS=(
+  "$HOME/Applications/WorkTimer.app"
+  "/Applications/WorkTimer.app"
+)
 
-if [[ ! -d "$APP_DIR" ]]; then
-  echo "WorkTimer.app is not installed yet. Run ./scripts/install-app.sh first." >&2
-  exit 1
-fi
+for APP_DIR in "${APP_DIRS[@]}"; do
+  if [[ -d "$APP_DIR" ]]; then
+    open -na "$APP_DIR"
+    exit 0
+  fi
+done
 
-open -na "$APP_DIR"
+echo "WorkTimer.app was not found in ~/Applications or /Applications." >&2
+echo "Install it first or move the app into an Applications folder." >&2
+exit 1

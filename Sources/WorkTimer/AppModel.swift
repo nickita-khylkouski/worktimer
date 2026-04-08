@@ -6,6 +6,34 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppModel {
+    enum AppearanceMode: String, CaseIterable {
+        case system
+        case light
+        case dark
+
+        var title: String {
+            switch self {
+            case .system:
+                return "System"
+            case .light:
+                return "Light"
+            case .dark:
+                return "Dark"
+            }
+        }
+
+        var preferredColorScheme: ColorScheme? {
+            switch self {
+            case .system:
+                return nil
+            case .light:
+                return .light
+            case .dark:
+                return .dark
+            }
+        }
+    }
+
     enum MenuBarDisplayMode: String, CaseIterable {
         case elapsed
         case earnings
@@ -58,6 +86,7 @@ final class AppModel {
 
     private enum DefaultsKey {
         static let menuBarDisplayMode = "menuBarDisplayMode"
+        static let appearanceMode = "appearanceMode"
         static let hourlyRate = "hourlyRate"
         static let dayHistory = "dayHistory"
         static let dismissedOnboarding = "dismissedOnboarding"
@@ -83,6 +112,12 @@ final class AppModel {
         didSet {
             persistSettings()
             refreshStatusItem()
+        }
+    }
+
+    var appearanceMode: AppearanceMode {
+        didSet {
+            persistSettings()
         }
     }
 
@@ -121,8 +156,10 @@ final class AppModel {
     private(set) var wisprFlowSummary: WisprFlowSummary = .zero
     private(set) var wisprFlowAvailable = false
     private(set) var launchAtLoginStatus: LaunchAtLoginManager.StatusSummary = .unavailable
+    private(set) var selectedDailySummary: DailyWorkSummary?
 
     let recoveryWindowManager = RecoveryWindowManager()
+    let dailyDetailWindowManager = DailyDetailWindowManager()
 
     private let statusItemController: StatusItemController?
     private let calendar = Calendar.autoupdatingCurrent
@@ -160,6 +197,8 @@ final class AppModel {
         let typingStore = try? Self.makeTypingStore(enabled: installsStatusItem, databaseURL: typingDatabaseURL)
         let storedMode = (try? typingStore?.stringSetting(for: DefaultsKey.menuBarDisplayMode))
             ?? UserDefaults.standard.string(forKey: DefaultsKey.menuBarDisplayMode)
+        let storedAppearanceMode = (try? typingStore?.stringSetting(for: DefaultsKey.appearanceMode))
+            ?? UserDefaults.standard.string(forKey: DefaultsKey.appearanceMode)
         let storedHourlyRate = (try? typingStore?.doubleSetting(for: DefaultsKey.hourlyRate))
             ?? ((UserDefaults.standard.object(forKey: DefaultsKey.hourlyRate) != nil)
                 ? UserDefaults.standard.double(forKey: DefaultsKey.hourlyRate)
@@ -167,10 +206,12 @@ final class AppModel {
         let storedHistory = (try? typingStore?.loadDailySummaries()) ?? nil
         let dismissedOnboarding = UserDefaults.standard.bool(forKey: DefaultsKey.dismissedOnboarding)
         let initialMode = MenuBarDisplayMode(rawValue: storedMode ?? "") ?? .elapsed
+        let initialAppearanceMode = AppearanceMode(rawValue: storedAppearanceMode ?? "") ?? .system
         let initialDayStart = Calendar.autoupdatingCurrent.startOfDay(for: now)
         let statusItemController = installsStatusItem ? StatusItemController() : nil
 
         self.menuBarDisplayMode = initialMode
+        self.appearanceMode = initialAppearanceMode
         self.hourlyRate = max(0, storedHourlyRate)
         self.isRunning = true
         self.launchedAt = initialDayStart
@@ -305,8 +346,7 @@ final class AppModel {
     }
 
     var totalPausedTime: TimeInterval {
-        let inFlightPause = (!isRunning && pausedSince != nil) ? currentPauseDuration(at: currentTime) : 0
-        return totalPausedDuration + inFlightPause
+        totalPausedTime(at: currentTime)
     }
 
     var totalToggleCount: Int {
@@ -349,11 +389,7 @@ final class AppModel {
     }
 
     var activeShare: Double {
-        let sessionLength = currentTime.timeIntervalSince(currentDayStart)
-        guard sessionLength > 0 else {
-            return isRunning ? 1 : 0
-        }
-        return min(max(cumulativeRunTime / sessionLength, 0), 1)
+        activeShare(at: currentTime)
     }
 
     var activeShareText: String {
@@ -394,6 +430,10 @@ final class AppModel {
         Self.formatCurrency(hourlyRate) + "/hr"
     }
 
+    var preferredColorScheme: ColorScheme? {
+        appearanceMode.preferredColorScheme
+    }
+
     var topBarText: String {
         switch menuBarDisplayMode {
         case .elapsed:
@@ -428,14 +468,7 @@ final class AppModel {
     }
 
     var todaySummary: DailyWorkSummary {
-        DailyWorkSummary(
-            dayStart: currentDayStart,
-            workedSeconds: cumulativeRunTime,
-            earningsAmount: currentEarnings,
-            pauseCount: pauseCount,
-            resetCount: resetCount,
-            mouseDistance: mouseSummary.distance
-        )
+        makeDailySummary(at: currentTime)
     }
 
     var dailySummaries: [DailyWorkSummary] {
@@ -507,13 +540,7 @@ final class AppModel {
     }
 
     var typingSummary: TypingSummary {
-        var duration = typingStoredSummary.duration
-        var characters = typingStoredSummary.characterCount
-        if let activeTypingSession {
-            duration += activeTypingDuration(at: currentTime, for: activeTypingSession)
-            characters += activeTypingSession.characterCount
-        }
-        return TypingSummary(duration: duration, characterCount: characters)
+        typingSummary(at: currentTime)
     }
 
     var typingTimeText: String {
@@ -545,13 +572,7 @@ final class AppModel {
     }
 
     var mouseSummary: MouseSummary {
-        var duration = mouseStoredSummary.duration
-        var distance = mouseStoredSummary.distance
-        if let activeMouseSession {
-            duration += activeMouseDuration(at: currentTime, for: activeMouseSession)
-            distance += activeMouseSession.distance
-        }
-        return MouseSummary(duration: duration, distance: distance)
+        mouseSummary(at: currentTime)
     }
 
     var mouseMoveTimeText: String {
@@ -740,6 +761,11 @@ final class AppModel {
         recoveryWindowManager.install(contentViewController: controller)
     }
 
+    func installDailyDetailPanel<Content: View>(@ViewBuilder content: () -> Content) {
+        let controller = NSHostingController(rootView: content())
+        dailyDetailWindowManager.install(contentViewController: controller)
+    }
+
     func startIfNeeded() {
         guard !isStarted else {
             return
@@ -864,6 +890,15 @@ final class AppModel {
 
     func hideControlPanel() {
         recoveryWindowManager.hide()
+    }
+
+    func openDailySummary(_ summary: DailyWorkSummary) {
+        selectedDailySummary = summary
+        dailyDetailWindowManager.show(relativeTo: recoveryWindowManager.window)
+    }
+
+    func hideDailySummary() {
+        dailyDetailWindowManager.hide()
     }
 
     func advance(to now: Date) {
@@ -1040,6 +1075,11 @@ final class AppModel {
         return max(0, now.timeIntervalSince(pausedSince))
     }
 
+    private func totalPausedTime(at now: Date) -> TimeInterval {
+        let inFlightPause = (!isRunning && pausedSince != nil) ? currentPauseDuration(at: now) : 0
+        return totalPausedDuration + inFlightPause
+    }
+
     private func cumulativeRunTime(at now: Date) -> TimeInterval {
         let inFlightRun = isRunning ? currentRunDuration(at: now) : 0
         return sessionRunDurations.reduce(0, +) + inFlightRun
@@ -1050,6 +1090,58 @@ final class AppModel {
             return accumulatedElapsed
         }
         return accumulatedElapsed + now.timeIntervalSince(runningSince)
+    }
+
+    private func activeShare(at now: Date) -> Double {
+        let sessionLength = now.timeIntervalSince(currentDayStart)
+        guard sessionLength > 0 else {
+            return isRunning ? 1 : 0
+        }
+        return min(max(cumulativeRunTime(at: now) / sessionLength, 0), 1)
+    }
+
+    private func typingSummary(at now: Date) -> TypingSummary {
+        var duration = typingStoredSummary.duration
+        var characters = typingStoredSummary.characterCount
+        if let activeTypingSession {
+            duration += activeTypingDuration(at: now, for: activeTypingSession)
+            characters += activeTypingSession.characterCount
+        }
+        return TypingSummary(duration: duration, characterCount: characters)
+    }
+
+    private func mouseSummary(at now: Date) -> MouseSummary {
+        var duration = mouseStoredSummary.duration
+        var distance = mouseStoredSummary.distance
+        if let activeMouseSession {
+            duration += activeMouseDuration(at: now, for: activeMouseSession)
+            distance += activeMouseSession.distance
+        }
+        return MouseSummary(duration: duration, distance: distance)
+    }
+
+    private func makeDailySummary(at now: Date) -> DailyWorkSummary {
+        let typingSummary = typingSummary(at: now)
+        let mouseSummary = mouseSummary(at: now)
+        let workedSeconds = cumulativeRunTime(at: now)
+        return DailyWorkSummary(
+            dayStart: currentDayStart,
+            workedSeconds: workedSeconds,
+            earningsAmount: (workedSeconds / 3600) * hourlyRate,
+            pauseCount: pauseCount,
+            resetCount: resetCount,
+            mouseDistance: mouseSummary.distance,
+            pausedSeconds: totalPausedTime(at: now),
+            mouseMoveSeconds: mouseSummary.duration,
+            typingSeconds: typingSummary.duration,
+            typingCharacterCount: typingSummary.characterCount,
+            wisprWordsToday: wisprFlowAvailable ? Int(wisprFlowSummary.wordsToday) : nil,
+            wisprDictationSeconds: wisprFlowAvailable ? wisprFlowSummary.dictationDurationToday : nil,
+            wisprClipsToday: wisprFlowAvailable ? wisprFlowSummary.clipsToday : nil,
+            hourlyRate: hourlyRate,
+            longestRunSeconds: longestRunDuration,
+            activeShare: activeShare(at: now)
+        )
     }
 
     private func finalizeCurrentRun(at now: Date) {
@@ -1231,18 +1323,12 @@ final class AppModel {
 
     private func archiveCurrentDay(until boundary: Date) {
         let workedSeconds = cumulativeRunTime(at: boundary)
-        guard workedSeconds > 0 || !logEntries.isEmpty || resetCount > 0 || mouseSummary.distance > 0 else {
+        let boundaryMouseSummary = mouseSummary(at: boundary)
+        guard workedSeconds > 0 || !logEntries.isEmpty || resetCount > 0 || boundaryMouseSummary.distance > 0 else {
             return
         }
 
-        let summary = DailyWorkSummary(
-            dayStart: currentDayStart,
-            workedSeconds: workedSeconds,
-            earningsAmount: (workedSeconds / 3600) * hourlyRate,
-            pauseCount: pauseCount,
-            resetCount: resetCount,
-            mouseDistance: mouseSummary.distance
-        )
+        let summary = makeDailySummary(at: boundary)
 
         if let existingIndex = dayHistory.firstIndex(where: { calendar.isDate($0.dayStart, inSameDayAs: currentDayStart) }) {
             dayHistory[existingIndex] = summary
@@ -1338,12 +1424,14 @@ final class AppModel {
     private func persistSettings() {
         if typingStore == nil {
             UserDefaults.standard.set(menuBarDisplayMode.rawValue, forKey: DefaultsKey.menuBarDisplayMode)
+            UserDefaults.standard.set(appearanceMode.rawValue, forKey: DefaultsKey.appearanceMode)
             UserDefaults.standard.set(hourlyRate, forKey: DefaultsKey.hourlyRate)
             return
         }
 
         do {
             try typingStore?.setString(menuBarDisplayMode.rawValue, for: DefaultsKey.menuBarDisplayMode)
+            try typingStore?.setString(appearanceMode.rawValue, for: DefaultsKey.appearanceMode)
             try typingStore?.setDouble(hourlyRate, for: DefaultsKey.hourlyRate)
         } catch {
             DebugTrace.log("persistSettings failed error=\(error.localizedDescription)")
@@ -1767,6 +1855,16 @@ struct DailyWorkSummary: Identifiable, Codable, Equatable {
     let pauseCount: Int
     let resetCount: Int
     let mouseDistance: Double?
+    let pausedSeconds: TimeInterval?
+    let mouseMoveSeconds: TimeInterval?
+    let typingSeconds: TimeInterval?
+    let typingCharacterCount: Int?
+    let wisprWordsToday: Int?
+    let wisprDictationSeconds: TimeInterval?
+    let wisprClipsToday: Int?
+    let hourlyRate: Double?
+    let longestRunSeconds: TimeInterval?
+    let activeShare: Double?
 
     var id: Date { dayStart }
 
@@ -1790,5 +1888,58 @@ struct DailyWorkSummary: Identifiable, Codable, Equatable {
 
     var mouseDistanceText: String {
         AppModel.formatDistance(mouseDistance ?? 0)
+    }
+
+    var pausedText: String {
+        AppModel.formatElapsed(pausedSeconds ?? 0)
+    }
+
+    var mouseMoveTimeText: String {
+        AppModel.formatElapsed(mouseMoveSeconds ?? 0)
+    }
+
+    var typingTimeText: String {
+        AppModel.formatElapsed(typingSeconds ?? 0)
+    }
+
+    var typingCharacterCountText: String {
+        "\(typingCharacterCount ?? 0)"
+    }
+
+    var typingWordsPerMinuteText: String {
+        guard let typingSeconds, typingSeconds > 0 else {
+            return "0"
+        }
+        let cpm = Double(typingCharacterCount ?? 0) / (typingSeconds / 60)
+        return "\(Int((cpm / 5).rounded()))"
+    }
+
+    var wisprWordsTodayText: String {
+        guard let wisprWordsToday else { return "--" }
+        return "\(wisprWordsToday)"
+    }
+
+    var wisprDictationTimeText: String {
+        guard let wisprDictationSeconds else { return "--" }
+        return AppModel.formatElapsed(wisprDictationSeconds)
+    }
+
+    var wisprClipsTodayText: String {
+        guard let wisprClipsToday else { return "--" }
+        return "\(wisprClipsToday)"
+    }
+
+    var hourlyRateText: String {
+        guard let hourlyRate else { return "--" }
+        return AppModel.formatCurrency(hourlyRate) + "/hr"
+    }
+
+    var longestRunText: String {
+        AppModel.formatElapsed(longestRunSeconds ?? 0)
+    }
+
+    var activeShareText: String {
+        let share = activeShare ?? 0
+        return "\(Int((share * 100).rounded()))%"
     }
 }

@@ -108,7 +108,17 @@ struct TypingStoreTests {
                 earningsAmount: 2.5,
                 pauseCount: 1,
                 resetCount: 0,
-                mouseDistance: 120
+                mouseDistance: 120,
+                pausedSeconds: 15,
+                mouseMoveSeconds: 5,
+                typingSeconds: 20,
+                typingCharacterCount: 42,
+                wisprWordsToday: 11,
+                wisprDictationSeconds: 9,
+                wisprClipsToday: 2,
+                hourlyRate: 45.5,
+                longestRunSeconds: 40,
+                activeShare: 0.66
             )
         ]
 

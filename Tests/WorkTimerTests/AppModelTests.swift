@@ -102,6 +102,75 @@ struct AppModelTests {
     }
 
     @Test
+    func archivedDayKeepsFullSavedStatsForDetailPanelAfterRelaunch() throws {
+        try withCleanDefaultsThrowing {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let databaseURL = root.appendingPathComponent("worktimer.sqlite")
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = .autoupdatingCurrent
+            let start = calendar.date(from: DateComponents(
+                year: 2026,
+                month: 4,
+                day: 7,
+                hour: 23,
+                minute: 59,
+                second: 50
+            ))!
+            let context = CaptureContext(
+                appName: "Superset",
+                bundleIdentifier: "app.superset",
+                sessionKey: "superset"
+            )
+            let firstLaunch = AppModel(now: start, installsStatusItem: false, typingDatabaseURL: databaseURL)
+
+            firstLaunch.hourlyRate = 90
+            firstLaunch.recordTypingInput(
+                TypingInput(context: context, mutation: .text("hello world")),
+                at: start.addingTimeInterval(1)
+            )
+            firstLaunch.recordMouseMovement(
+                MouseMovementSample(pointDistance: 24, estimatedMillimeters: 304.8),
+                at: start.addingTimeInterval(2)
+            )
+            firstLaunch.recordMouseMovement(
+                MouseMovementSample(pointDistance: 12, estimatedMillimeters: 152.4),
+                at: start.addingTimeInterval(3)
+            )
+            firstLaunch.toggleRunning(at: start.addingTimeInterval(4))
+            firstLaunch.toggleRunning(at: start.addingTimeInterval(7))
+            firstLaunch.advance(to: start.addingTimeInterval(15))
+
+            let relaunched = AppModel(
+                now: start.addingTimeInterval(45),
+                installsStatusItem: false,
+                typingDatabaseURL: databaseURL
+            )
+            let archivedDay = try #require(
+                relaunched.dailySummaries.first(where: {
+                    calendar.isDate($0.dayStart, inSameDayAs: start)
+                })
+            )
+
+            #expect(archivedDay.workedText == "0:00:07")
+            #expect(archivedDay.earningsText == "$0.18")
+            #expect(archivedDay.hourlyRateText == "$90.00/hr")
+            #expect(archivedDay.pausedText == "0:00:03")
+            #expect(archivedDay.longestRunText == "0:00:04")
+            #expect(archivedDay.activeShareText == "0%")
+            #expect(archivedDay.typingTimeText == "0:00:01")
+            #expect(archivedDay.typingCharacterCountText == "11")
+            #expect(archivedDay.mouseMoveTimeText == "0:00:03")
+            #expect(archivedDay.mouseDistanceText == "1.50 ft")
+            #expect(archivedDay.pauseCount == 1)
+            #expect(archivedDay.resetCount == 0)
+
+            relaunched.openDailySummary(archivedDay)
+            #expect(relaunched.selectedDailySummary == archivedDay)
+        }
+    }
+
+    @Test
     func earningsIncreaseWithWorkedTimeAndHourlyRate() {
         withCleanDefaults {
             let start = Date(timeIntervalSince1970: 4_000)
