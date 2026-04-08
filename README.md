@@ -1,52 +1,64 @@
-# WorkTimer
+<p align="center">
+  <img src="AppBundle/Resources/AppIcon.png" alt="WorkTimer icon" width="120" height="120">
+</p>
 
-Minimal macOS menu bar time tracker with live pay, typing stats, mouse travel, AI usage, disk counters, and Wispr Flow stats.
+<h1 align="center">WorkTimer</h1>
 
-## What It Is
+<p align="center">
+  Small macOS menu bar work tracker with live pay, typing stats, mouse travel, AI usage, disk counters, and Wispr Flow stats.
+</p>
 
-WorkTimer lives in the menu bar, starts counting immediately, and gives you a small control panel instead of a full main window.
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-black" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
+  <img src="https://img.shields.io/badge/app-menu%20bar%20%2B%20Dock-white" alt="Menu bar and Dock">
+  <img src="https://img.shields.io/badge/storage-local%20SQLite-blue" alt="Local SQLite">
+</p>
+
+## Overview
+
+WorkTimer is a menu bar app that starts counting immediately, stays small, and keeps the important controls one click away.
 
 It can show any of these in the top bar:
 
-- timer
-- money
-- typing time
-- CPM
-- WPM
-- character count
-- mouse travel
-- AI total
-- AI tokens per second
-- AI today
-- disk read
-- disk write
-- SSD wear
-- icon only
+| Mode | What it shows |
+| --- | --- |
+| `Timer` | Live work timer |
+| `Money` | Live earnings |
+| `Type Time` | Active typing time |
+| `CPM` / `WPM` | Typing speed |
+| `Chars` | Character count |
+| `Mouse` | Estimated cursor travel |
+| `AI Total` / `AI /s` / `AI Today` | Local AI usage |
+| `Disk Read` / `Disk Write` / `SSD Wear` | SSD stats |
+| `Icon` | Compact icon mode |
 
-## What It Tracks
+## Features
 
-- work time with pause, resume, reset, and daily rollover
-- hourly pay with live earnings
-- typing time, chars, CPM, and WPM
-- estimated on-screen mouse travel
-- local Codex and Claude usage
-- SSD read/write counters and wear
-- Wispr Flow words, clips, and dictation time
+| Area | Included |
+| --- | --- |
+| Time tracking | Pause, resume, reset, daily rollover, history |
+| Money | Hourly pay input and live earnings |
+| Typing | Time, chars, CPM, WPM |
+| Mouse | Estimated on-screen travel distance |
+| AI | Local Codex + Claude totals and token-rate graph |
+| Wispr Flow | Words today, clips today, dictation time |
+| Disk | Read, write, wear, SMART-style counters |
 
-Most local state is stored in:
+Local state is stored in:
 
 `~/Library/Application Support/WorkTimer/worktimer.sqlite`
 
 ## Install
 
-### Fastest path
+### Downloaded app
 
 1. Download `WorkTimer.app` or `WorkTimer-macOS.zip`
-2. Drag `WorkTimer.app` into `/Applications` or `~/Applications`
+2. Move `WorkTimer.app` into `/Applications` or `~/Applications`
 3. Open it
-4. The setup panel should appear on first launch
+4. The setup panel should guide the rest
 
-If the menu bar item seems missing, check the hidden section in Ice, Bartender, or other menu bar organizers first.
+If the menu bar item looks missing, check Ice, Bartender, or the hidden menu bar section first.
 
 ### Build from source
 
@@ -55,64 +67,57 @@ swift test
 ./scripts/install-app.sh
 ```
 
-That installs the app to:
+That installs to:
 
 `~/Applications/WorkTimer.app`
 
-## First Launch Setup
+## First Launch
 
-Timer and pay tracking work right away.
+Timer and pay tracking work immediately.
 
 Typing and mouse stats need macOS privacy approval:
 
 - `System Settings > Privacy & Security > Accessibility`
 - `System Settings > Privacy & Security > Input Monitoring`
 
-Important:
+Rules that matter:
 
-- move `WorkTimer.app` into `Applications` before granting permissions
-- if privacy permissions were granted after launch, reopen the app once
-- the app also registers for launch at login, and macOS may ask you to approve that in `Login Items`
+- move the app into `Applications` before granting permissions
+- if permissions were granted after launch, reopen the app once
+- launch-at-login may need approval in `Login Items`
 
-Open both permission panes directly:
+Useful scripts:
 
 ```bash
 ./scripts/open-permissions.sh
-```
-
-If permissions get stuck:
-
-```bash
 ./scripts/reset-permissions.sh
-./scripts/open-permissions.sh
-```
-
-Inspect the installed app’s signing and trust state:
-
-```bash
+./scripts/open-app.sh
 ./scripts/doctor.sh
 ```
 
 ## Controls
 
-- left click: pause or resume
-- double left click: open the panel
-- right click: open the panel
-- `Esc`: hide the panel
+| Action | Result |
+| --- | --- |
+| Left click | Pause or resume |
+| Double left click | Open panel |
+| Right click | Open panel |
+| `Esc` | Hide panel |
 
 Inside the panel you can:
 
 - reset the timer
-- edit today’s worked time
-- change the hourly rate
-- switch what the top bar shows
-- inspect daily history and action logs
+- edit today’s time
+- change hourly pay
+- switch top-bar display modes
+- inspect history and logs
+- hover the `AI /s` graph for exact sample values
 
 ## AI Usage
 
 WorkTimer reads local Codex and Claude usage from local logs and snapshots when available.
 
-If `AI /s` is selected, the panel shows a 30-minute sparkline. Hovering the graph shows the exact rate at that sample plus the sample time.
+When `AI /s` is selected, the panel shows a 30-minute sparkline. Hovering the graph shows the exact rate and the sample time for that point.
 
 ## Wispr Flow
 
@@ -122,7 +127,7 @@ If Wispr Flow is installed locally, WorkTimer reads:
 - clips today
 - dictation time today
 
-It auto-detects the standard local Wispr Flow database and falls back cleanly if it is unavailable.
+The monitor auto-detects the standard local Wispr Flow database and falls back cleanly if it is missing.
 
 ## Packaging
 
@@ -137,7 +142,7 @@ That creates:
 - `dist/WorkTimer-macOS.zip`
 - `dist/README-SEND-TO-FRIENDS.txt`
 
-If you have Developer ID + notarization set up:
+If you have Developer ID + notarization configured:
 
 ```bash
 ./scripts/package-app.sh --notarize --profile=Personal
@@ -146,7 +151,6 @@ If you have Developer ID + notarization set up:
 ## Notes
 
 - macOS 14+ recommended
-- the app is designed to be small and persistent, not a full desktop timer app
 - mouse travel is an estimate of cursor movement across the display surface, not literal hand movement
-- AI usage depends on local tool logs existing on that machine
+- AI usage depends on local logs existing on that machine
 - updating the app should preserve the current day timer and history
