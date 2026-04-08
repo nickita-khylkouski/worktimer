@@ -4,6 +4,7 @@ struct TimerPanelView: View {
     @Bindable var model: AppModel
     @State private var hourlyRateInput = ""
     @State private var workedTimeDigits = ""
+    @State private var isEditingWorkedTime = false
     @FocusState private var hourlyRateFieldFocused: Bool
     @FocusState private var workedTimeFieldFocused: Bool
 
@@ -41,6 +42,7 @@ struct TimerPanelView: View {
         .onChange(of: workedTimeFieldFocused) { _, isFocused in
             if !isFocused {
                 commitWorkedTimeInput()
+                isEditingWorkedTime = false
             }
         }
         .onChange(of: model.hourlyRate) { _, _ in
@@ -128,16 +130,62 @@ struct TimerPanelView: View {
 
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("WorkTimer")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.56))
 
-                    Text(model.elapsedText)
-                        .font(.system(size: 26, weight: .bold, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(model.elapsedText)
+                            .font(.system(size: 26, weight: .bold, design: .monospaced))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+
+                        Button {
+                            toggleWorkedTimeEditor()
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(isEditingWorkedTime ? .black : .white.opacity(0.82))
+                                .frame(width: 24, height: 24)
+                                .background(isEditingWorkedTime ? Color.white : Color.white.opacity(0.06))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .stroke(
+                                            isEditingWorkedTime ? Color.white : Color.white.opacity(0.08),
+                                            lineWidth: 1
+                                        )
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if isEditingWorkedTime {
+                        HStack(spacing: 8) {
+                            TextField("h:mm:ss", text: workedTimeInput)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .focused($workedTimeFieldFocused)
+                                .onSubmit {
+                                    saveWorkedTimeEdit()
+                                }
+
+                            Button("Set") {
+                                saveWorkedTimeEdit()
+                            }
+                            .buttonStyle(MiniPanelButtonStyle())
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .background(Color.white.opacity(0.045))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -154,39 +202,6 @@ struct TimerPanelView: View {
                 CompactMetric(label: "Status", value: model.stateLabel)
                 CompactMetric(label: "Today", value: model.cumulativeRunText)
                 CompactMetric(label: "Pay", value: model.currentEarningsText)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Edit today")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.56))
-
-                HStack(spacing: 8) {
-                    TextField("h:mm:ss", text: workedTimeInput)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .focused($workedTimeFieldFocused)
-                        .onSubmit {
-                            commitWorkedTimeInput()
-                        }
-
-                    Button("Set") {
-                        commitWorkedTimeInput()
-                    }
-                    .buttonStyle(MiniPanelButtonStyle())
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(Color.white.opacity(0.045))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-
-                Text("Type digits. The separators stay in place.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.42))
             }
         }
         .panelCard()
@@ -277,7 +292,7 @@ struct TimerPanelView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     SectionLabel("Last 30 minutes")
                     AIRateSparkline(values: model.aiRateSeries, trailingLabel: "30m")
-                        .frame(height: 42)
+                        .frame(height: 56)
                 }
                 .padding(.top, 2)
             }
@@ -468,6 +483,25 @@ struct TimerPanelView: View {
         }
         model.setWorkedDuration(parsedValue)
         syncWorkedTimeInput()
+    }
+
+    private func toggleWorkedTimeEditor() {
+        if isEditingWorkedTime {
+            saveWorkedTimeEdit()
+            return
+        }
+
+        syncWorkedTimeInput()
+        isEditingWorkedTime = true
+        DispatchQueue.main.async {
+            workedTimeFieldFocused = true
+        }
+    }
+
+    private func saveWorkedTimeEdit() {
+        commitWorkedTimeInput()
+        isEditingWorkedTime = false
+        workedTimeFieldFocused = false
     }
 
     private func sanitizedHourlyRateInput(_ raw: String) -> String {
@@ -809,6 +843,7 @@ private struct TopBarModeButtonStyle: ButtonStyle {
 private struct AIRateSparkline: View {
     let values: [Double]
     let trailingLabel: String
+    @State private var hoveredIndex: Int?
 
     var body: some View {
         GeometryReader { geometry in
@@ -823,6 +858,25 @@ private struct AIRateSparkline: View {
             ZStack(alignment: .bottomLeading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.white.opacity(0.04))
+
+                if let hoveredIndex,
+                   hoveredIndex < points.count {
+                    let hoveredPoint = points[hoveredIndex]
+
+                    Path { path in
+                        path.move(to: CGPoint(x: hoveredPoint.x, y: 4))
+                        path.addLine(to: CGPoint(x: hoveredPoint.x, y: geometry.size.height - 8))
+                    }
+                    .stroke(
+                        Color.white.opacity(0.34),
+                        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                    )
+
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 6, height: 6)
+                        .position(hoveredPoint)
+                }
 
                 Path { path in
                     guard let first = points.first else { return }
@@ -853,6 +907,14 @@ private struct AIRateSparkline: View {
                 }
                 .stroke(Color.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
 
+                if let hoveredIndex,
+                   hoveredIndex < values.count {
+                    hoverLabel(for: hoveredIndex)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 6)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+
                 HStack {
                     Text("0")
                     Spacer()
@@ -863,12 +925,46 @@ private struct AIRateSparkline: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 4)
             }
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                switch phase {
+                case let .active(location):
+                    hoveredIndex = hoveredIndex(for: location.x, width: geometry.size.width, count: values.count)
+                case .ended:
+                    hoveredIndex = nil
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func hoverLabel(for index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(AppModel.formatTokensPerSecond(values[index]))/s")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.black)
+            Text(relativeTimeText(for: index, count: values.count))
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.black.opacity(0.72))
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
     private func xPosition(for index: Int, width: CGFloat, count: Int) -> CGFloat {
         guard count > 1 else { return width / 2 }
         return CGFloat(index) / CGFloat(count - 1) * width
+    }
+
+    private func hoveredIndex(for x: CGFloat, width: CGFloat, count: Int) -> Int? {
+        guard count > 0, width > 0 else {
+            return nil
+        }
+
+        let normalized = min(max(x / width, 0), 1)
+        return Int((normalized * CGFloat(count - 1)).rounded())
     }
 
     private func graphScaleMax(for values: [Double]) -> Double {
@@ -889,6 +985,27 @@ private struct AIRateSparkline: View {
         let drawableHeight = max(1, height - topPadding - bottomPadding)
         return topPadding + (1 - normalized) * drawableHeight
     }
+
+    private func relativeTimeText(for index: Int, count: Int) -> String {
+        guard count > 0 else {
+            return "Now"
+        }
+
+        let minutesAgo = max(0, count - 1 - index)
+        if minutesAgo == 0 {
+            return "Now"
+        }
+
+        let sampleDate = Date().addingTimeInterval(TimeInterval(-minutesAgo * 60))
+        return Self.hoverTimeFormatter.string(from: sampleDate)
+    }
+
+    private static let hoverTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
 }
 
 private extension View {

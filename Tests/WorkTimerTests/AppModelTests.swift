@@ -112,8 +112,8 @@ struct AppModelTests {
             model.menuBarDisplayMode = .earnings
 
             #expect(model.currentEarnings == 0.5)
-            #expect(model.currentEarningsText == "$0.50")
-            #expect(model.topBarText == "$0.50")
+            #expect(model.currentEarningsText == "$0.5000")
+            #expect(model.topBarText == "$0.5000")
             #expect(model.hourlyRateText == "$60.00/hr")
         }
     }
@@ -131,7 +131,7 @@ struct AppModelTests {
 
             #expect(relaunched.elapsedText == "0:01:15")
             #expect(relaunched.cumulativeRunText == "0:01:15")
-            #expect(relaunched.currentEarningsText == "$2.50")
+            #expect(relaunched.currentEarningsText == "$2.500")
             #expect(relaunched.dailySummaries.count == 1)
         }
     }
@@ -158,7 +158,7 @@ struct AppModelTests {
             )
 
             #expect(relaunched.cumulativeRunText == "1:00:15")
-            #expect(relaunched.currentEarningsText == "$0.00")
+            #expect(relaunched.currentEarningsText == "$0.0000")
         }
     }
 

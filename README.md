@@ -16,12 +16,26 @@ Small macOS menu bar timer for tracking work time from the top-right of the scre
 - Saves the current day session locally, so relaunching the app does not wipe the timer.
 - Tracks typing time, chars, CPM, WPM, and estimated on-screen mouse travel.
 
+## Quick Start For Someone Downloading The App
+
+If you are just receiving `WorkTimer.app` or `WorkTimer-macOS.zip`, do this:
+
+1. Unzip it
+2. Drag `WorkTimer.app` into `/Applications` or `~/Applications`
+3. Open it
+4. The setup panel should open automatically on first launch
+5. If you want typing and mouse stats, press the in-app `Grant Access` button and enable WorkTimer in:
+   - `System Settings > Privacy & Security > Accessibility`
+   - `System Settings > Privacy & Security > Input Monitoring`
+
+If the menu bar item is missing, check the hidden section in Ice/Bartender first.
+
 ## Requirements
 
 - macOS 14 or newer
 - Xcode 16 or current Swift 6 toolchain
 
-## Install
+## Developer Install
 
 ```bash
 cd apps/typekeep
@@ -40,8 +54,8 @@ Typing and mouse stats need macOS privacy approval:
 
 - `System Settings > Privacy & Security > Accessibility`
 - `System Settings > Privacy & Security > Input Monitoring`
-- move `WorkTimer.app` into `Applications` before granting permissions
-- after turning on both switches, quit and reopen `WorkTimer` once
+- move `WorkTimer.app` into `/Applications` or `~/Applications` before granting permissions
+- WorkTimer retries automatically after both switches are on, but if stats still look stuck, reopen `WorkTimer` once
 
 You can jump straight there with:
 
@@ -56,6 +70,13 @@ If permissions get stuck and you want to re-grant them cleanly:
 cd apps/typekeep
 ./scripts/reset-permissions.sh
 ./scripts/open-permissions.sh
+```
+
+To inspect the installed app’s trust state and path:
+
+```bash
+cd apps/typekeep
+./scripts/doctor.sh
 ```
 
 ## Launch Again Later
@@ -83,6 +104,8 @@ That creates:
 - `dist/WorkTimer-macOS.zip`
 - `dist/README-SEND-TO-FRIENDS.txt`
 
+That is the preferred non-developer onboarding path for another person.
+
 To build a notarized zip with your personal ASC auth profile:
 
 ```bash
@@ -94,6 +117,7 @@ cd apps/typekeep
 
 - The app should appear in the top-right menu bar area.
 - The app should also appear in the Dock while it is running.
+- On first launch, the setup panel should open automatically.
 - The app also attempts to turn on launch-at-login automatically.
 - If macOS asks for approval, check `System Settings > General > Login Items`.
 - If you want typing stats or mouse travel, approve `WorkTimer` in both `Accessibility` and `Input Monitoring`.
@@ -130,3 +154,4 @@ swift test
 - Older `typing.sqlite` installs are migrated automatically the first time the new build launches.
 - Updating or reinstalling the app should preserve the current day timer and history.
 - Mouse distance is an estimate of cursor travel on the display surface, based on display size reported by macOS.
+- Wispr Flow stats are detected automatically from the local `flow.sqlite` database when Wispr Flow is installed.

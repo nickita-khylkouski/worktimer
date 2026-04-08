@@ -153,6 +153,7 @@ final class AppModel {
     private let aiUsageRefreshInterval: TimeInterval = 3
     private let diskHealthRefreshInterval: TimeInterval = 60
     private let wisprFlowRefreshInterval: TimeInterval = 30
+    private let liveTickInterval: Duration = .milliseconds(250)
     private var dismissedOnboarding = false
 
     init(now: Date = .now, installsStatusItem: Bool = true, typingDatabaseURL: URL? = nil) {
@@ -386,7 +387,7 @@ final class AppModel {
     }
 
     var currentEarningsText: String {
-        Self.formatCurrency(currentEarnings)
+        Self.formatLiveCurrency(currentEarnings)
     }
 
     var hourlyRateText: String {
@@ -758,7 +759,7 @@ final class AppModel {
 
         tickerTask = Task { [weak self] in
             while let self, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: liveTickInterval)
                 await self.tick()
             }
         }
@@ -1502,6 +1503,26 @@ final class AppModel {
         return amount.formatted(
             .currency(code: currencyCode)
                 .precision(.fractionLength(2))
+        )
+    }
+
+    nonisolated static func formatLiveCurrency(_ amount: Double) -> String {
+        let currencyCode = Locale.autoupdatingCurrent.currency?.identifier ?? "USD"
+        let safeAmount = max(0, amount)
+
+        let fractionDigits: Int
+        switch safeAmount {
+        case 0..<1:
+            fractionDigits = 4
+        case 1..<10:
+            fractionDigits = 3
+        default:
+            fractionDigits = 2
+        }
+
+        return safeAmount.formatted(
+            .currency(code: currencyCode)
+                .precision(.fractionLength(fractionDigits))
         )
     }
 
