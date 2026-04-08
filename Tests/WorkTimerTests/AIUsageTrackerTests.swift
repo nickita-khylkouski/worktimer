@@ -90,6 +90,7 @@ struct AIUsageTrackerTests {
         #expect(abs(tracker.summary().lastMinuteAverageTokensPerSecond - (40.0 / 55.0)) < 0.0001)
         #expect(abs(tracker.summary().lastFiveMinutesAverageTokensPerSecond - (40.0 / 55.0)) < 0.0001)
         #expect(abs(tracker.summary().lastFifteenMinutesAverageTokensPerSecond - (40.0 / 55.0)) < 0.0001)
+        #expect(abs(tracker.summary().lastHourAverageTokensPerSecond - (40.0 / 55.0)) < 0.0001)
 
         let handle = try FileHandle(forWritingTo: session)
         try handle.seekToEnd()
@@ -107,6 +108,7 @@ struct AIUsageTrackerTests {
         #expect(tracker.summary().lastMinuteAverageTokensPerSecond == 0)
         #expect(abs(tracker.summary().lastFiveMinutesAverageTokensPerSecond - (60.0 / 75.0)) < 0.0001)
         #expect(abs(tracker.summary().lastFifteenMinutesAverageTokensPerSecond - (60.0 / 75.0)) < 0.0001)
+        #expect(abs(tracker.summary().lastHourAverageTokensPerSecond - (60.0 / 75.0)) < 0.0001)
     }
 
     @Test
@@ -141,5 +143,137 @@ struct AIUsageTrackerTests {
         try tracker.bootstrap()
 
         #expect(tracker.summary().codex.tokens == 25)
+    }
+
+    @Test
+    func snapshotlessTrackerStillBuildsRatesFromLiveLogs() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let emptySiteRoot = root.appendingPathComponent("empty-site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+
+        let session = codexRoot.appendingPathComponent("2026/04/07/session.jsonl")
+        try writeAIUsageFixture(session, """
+        {"timestamp":"2026-04-07T17:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":5,"total_tokens":60}}}}
+        """)
+        let now = isoDate("2026-04-07T17:00:30Z")
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: session.path)
+
+        let tracker = try AIUsageTracker(
+            siteRoot: emptySiteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            supersetSessionLogRoot: root.appendingPathComponent("superset", isDirectory: true),
+            now: { now }
+        )
+        try tracker.bootstrap()
+        let summary = tracker.summary()
+
+        #expect(summary.codex.tokens == 60)
+        #expect(summary.combined.tokens == 60)
+        #expect(summary.lastMinuteAverageTokensPerSecond > 0)
+    }
+
+    @Test
+    func malformedJsonLinesDoNotKillTracker() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let emptySiteRoot = root.appendingPathComponent("empty-site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+
+        let session = codexRoot.appendingPathComponent("2026/04/07/session.jsonl")
+        try writeAIUsageFixture(session, """
+        this is not json
+        {"timestamp":"2026-04-07T17:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":5,"total_tokens":60}}}}
+        """)
+        let now = isoDate("2026-04-07T17:00:30Z")
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: session.path)
+
+        let tracker = try AIUsageTracker(
+            siteRoot: emptySiteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            supersetSessionLogRoot: root.appendingPathComponent("superset", isDirectory: true),
+            now: { now }
+        )
+        try tracker.bootstrap()
+        let summary = tracker.summary()
+
+        #expect(summary.codex.tokens == 60)
+        #expect(summary.lastMinuteAverageTokensPerSecond > 0)
+    }
+
+    @Test
+    func rateSamplesIgnoreSnapshotCutoffEvenWhenTotalsDoNot() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let siteRoot = root.appendingPathComponent("site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+
+        let codexUsage = siteRoot.appendingPathComponent("usage-data/codex-usage.json")
+        let claudeUsage = siteRoot.appendingPathComponent("usage-data/claude-usage.json")
+        try writeAIUsageFixture(codexUsage, #"{"daily":[],"totals":{"totalTokens":1000,"costUSD":0}}"#)
+        try writeAIUsageFixture(claudeUsage, #"{"daily":[],"totals":{"totalTokens":0,"totalCost":0}}"#)
+
+        let snapshotTime = isoDate("2026-04-07T18:00:00Z")
+        try FileManager.default.setAttributes([.modificationDate: snapshotTime], ofItemAtPath: codexUsage.path)
+        try FileManager.default.setAttributes([.modificationDate: snapshotTime], ofItemAtPath: claudeUsage.path)
+
+        let session = codexRoot.appendingPathComponent("2026/04/07/session.jsonl")
+        try writeAIUsageFixture(session, """
+        {"timestamp":"2026-04-07T17:59:50Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":50}}}}
+        """)
+        try FileManager.default.setAttributes([.modificationDate: snapshotTime.addingTimeInterval(5)], ofItemAtPath: session.path)
+
+        let now = isoDate("2026-04-07T18:00:20Z")
+        let tracker = try AIUsageTracker(
+            siteRoot: siteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            supersetSessionLogRoot: root.appendingPathComponent("superset", isDirectory: true),
+            now: { now }
+        )
+        try tracker.bootstrap()
+        let summary = tracker.summary()
+
+        #expect(summary.codex.tokens == 1_000)
+        #expect(summary.lastMinuteAverageTokensPerSecond > 0)
+    }
+
+    @Test
+    func thirtyMinuteSeriesRetainsOlderRecentSamples() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let siteRoot = root.appendingPathComponent("site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+
+        let codexUsage = siteRoot.appendingPathComponent("usage-data/codex-usage.json")
+        let claudeUsage = siteRoot.appendingPathComponent("usage-data/claude-usage.json")
+        try writeAIUsageFixture(codexUsage, #"{"daily":[],"totals":{"totalTokens":0,"costUSD":0}}"#)
+        try writeAIUsageFixture(claudeUsage, #"{"daily":[],"totals":{"totalTokens":0,"totalCost":0}}"#)
+
+        let now = isoDate("2026-04-07T17:30:00Z")
+        let cutoff = isoDate("2026-04-07T16:00:00Z")
+        try FileManager.default.setAttributes([.modificationDate: cutoff], ofItemAtPath: codexUsage.path)
+        try FileManager.default.setAttributes([.modificationDate: cutoff], ofItemAtPath: claudeUsage.path)
+
+        let session = codexRoot.appendingPathComponent("2026/04/07/session.jsonl")
+        try writeAIUsageFixture(session, """
+        {"timestamp":"2026-04-07T17:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":60,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":60}}}}
+        """)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: session.path)
+
+        let tracker = try AIUsageTracker(
+            siteRoot: siteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            supersetSessionLogRoot: root.appendingPathComponent("superset", isDirectory: true),
+            now: { now }
+        )
+        try tracker.bootstrap()
+        let summary = tracker.summary()
+
+        #expect(summary.lastThirtyMinutesRateSeries.count == 30)
+        #expect(summary.lastThirtyMinutesRateSeries.contains(where: { $0 > 0 }))
     }
 }

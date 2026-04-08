@@ -145,6 +145,7 @@ struct AppModelTests {
             let start = Date(timeIntervalSince1970: 5_500)
             let firstLaunch = AppModel(now: start, installsStatusItem: false, typingDatabaseURL: databaseURL)
 
+            firstLaunch.hourlyRate = 0
             firstLaunch.advance(to: start.addingTimeInterval(30))
             firstLaunch.setWorkedDuration(3_600, at: start.addingTimeInterval(30))
 
@@ -253,11 +254,122 @@ struct AppModelTests {
         #expect(AppModel.formatTokensPerSecond(3.25) == "3.2")
         #expect(AppModel.formatTokensPerSecond(57.8) == "58")
         #expect(AppModel.formatTokensPerSecond(2_300) == "2.3K")
+        #expect(AppModel.formatTokensPerSecond(0.004) == "<0.01")
+    }
+
+    @Test
+    func aiRateDisplayPrefersMeaningfulRecentWindow() {
+        let tinyOneMinute = AIUsageSummary(
+            combined: AIUsageComponentSummary(tokens: 0, todayTokens: 0),
+            codex: AIUsageComponentSummary(tokens: 0, todayTokens: 0),
+            claude: AIUsageComponentSummary(tokens: 0, todayTokens: 0),
+            lastMinuteAverageTokensPerSecond: 0.004,
+            lastFiveMinutesAverageTokensPerSecond: 0.03,
+            lastFifteenMinutesAverageTokensPerSecond: 0.02,
+            lastHourAverageTokensPerSecond: 0.01,
+            lastThirtyMinutesRateSeries: Array(repeating: 0, count: 30),
+            hasRecentSupersetSessionActivity: false,
+            watchedCodexFiles: 1,
+            watchedClaudeFiles: 0
+        )
+        #expect(AppModel.preferredAITokensPerSecondDisplay(for: tinyOneMinute) == 0.03)
+
+        let recentSuperset = AIUsageSummary(
+            combined: AIUsageComponentSummary(tokens: 0, todayTokens: 0),
+            codex: AIUsageComponentSummary(tokens: 0, todayTokens: 0),
+            claude: AIUsageComponentSummary(tokens: 0, todayTokens: 0),
+            lastMinuteAverageTokensPerSecond: 0,
+            lastFiveMinutesAverageTokensPerSecond: 0,
+            lastFifteenMinutesAverageTokensPerSecond: 2.5,
+            lastHourAverageTokensPerSecond: 1.25,
+            lastThirtyMinutesRateSeries: Array(repeating: 0, count: 30),
+            hasRecentSupersetSessionActivity: true,
+            watchedCodexFiles: 1,
+            watchedClaudeFiles: 0
+        )
+        #expect(AppModel.preferredAITokensPerSecondDisplay(for: recentSuperset) == 2.5)
+    }
+
+    @Test
+    func relaunchRestoresCachedAIUsageSummaryImmediately() throws {
+        try withCleanDefaultsThrowing {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+            let databaseURL = root.appendingPathComponent("worktimer.sqlite")
+
+            let cachedSummary = AIUsageSummary(
+                combined: AIUsageComponentSummary(tokens: 10_000, todayTokens: 2_000),
+                codex: AIUsageComponentSummary(tokens: 8_000, todayTokens: 1_500),
+                claude: AIUsageComponentSummary(tokens: 2_000, todayTokens: 500),
+                lastMinuteAverageTokensPerSecond: 125,
+                lastFiveMinutesAverageTokensPerSecond: 75,
+                lastFifteenMinutesAverageTokensPerSecond: 30,
+                lastHourAverageTokensPerSecond: 20,
+                lastThirtyMinutesRateSeries: Array(repeating: 25, count: 30),
+                hasRecentSupersetSessionActivity: true,
+                watchedCodexFiles: 1,
+                watchedClaudeFiles: 1
+            )
+            let cachedData = try JSONEncoder().encode(cachedSummary)
+            let cachedString = String(decoding: cachedData, as: UTF8.self)
+
+            _ = AppModel(now: Date(timeIntervalSince1970: 10_000), installsStatusItem: false, typingDatabaseURL: databaseURL)
+            try firstValueStore(databaseURL: databaseURL, key: "aiUsageSummaryCache", value: cachedString)
+
+            let relaunched = AppModel(now: Date(timeIntervalSince1970: 10_005), installsStatusItem: false, typingDatabaseURL: databaseURL)
+
+            #expect(relaunched.aiUsageAvailable == true)
+            #expect(relaunched.aiTokensPerSecondText == "125/s")
+            #expect(relaunched.aiCombinedTokensText == "10.0K")
+        }
+    }
+
+    @Test
+    func weakerLiveAISummaryDoesNotClobberCachedRateDuringActiveSession() {
+        let current = AIUsageSummary(
+            combined: AIUsageComponentSummary(tokens: 10_000, todayTokens: 3_000),
+            codex: AIUsageComponentSummary(tokens: 8_000, todayTokens: 2_500),
+            claude: AIUsageComponentSummary(tokens: 2_000, todayTokens: 500),
+            lastMinuteAverageTokensPerSecond: 0,
+            lastFiveMinutesAverageTokensPerSecond: 125,
+            lastFifteenMinutesAverageTokensPerSecond: 80,
+            lastHourAverageTokensPerSecond: 60,
+            lastThirtyMinutesRateSeries: Array(repeating: 20, count: 30),
+            hasRecentSupersetSessionActivity: true,
+            watchedCodexFiles: 10,
+            watchedClaudeFiles: 3
+        )
+        let incoming = AIUsageSummary(
+            combined: AIUsageComponentSummary(tokens: 10_500, todayTokens: 3_500),
+            codex: AIUsageComponentSummary(tokens: 8_200, todayTokens: 3_000),
+            claude: AIUsageComponentSummary(tokens: 2_300, todayTokens: 500),
+            lastMinuteAverageTokensPerSecond: 0,
+            lastFiveMinutesAverageTokensPerSecond: 0,
+            lastFifteenMinutesAverageTokensPerSecond: 0,
+            lastHourAverageTokensPerSecond: 0,
+            lastThirtyMinutesRateSeries: Array(repeating: 0, count: 30),
+            hasRecentSupersetSessionActivity: true,
+            watchedCodexFiles: 11,
+            watchedClaudeFiles: 4
+        )
+
+        let merged = AppModel.mergedAIUsageSummary(current: current, incoming: incoming)
+
+        #expect(merged.combined.tokens == 10_500)
+        #expect(merged.lastFiveMinutesAverageTokensPerSecond == 125)
+        #expect(merged.lastThirtyMinutesRateSeries.contains(where: { $0 > 0 }))
+        #expect(merged.watchedCodexFiles == 11)
     }
 
     private func withCleanDefaults(_ body: () -> Void) {
         clearDefaults()
         body()
+        clearDefaults()
+    }
+
+    private func withCleanDefaultsThrowing(_ body: () throws -> Void) throws {
+        clearDefaults()
+        try body()
         clearDefaults()
     }
 
@@ -280,5 +392,10 @@ struct AppModelTests {
         ).appendingPathComponent("WorkTimer", isDirectory: true)
 
         return directory.appendingPathComponent("session.json", isDirectory: false)
+    }
+
+    private func firstValueStore(databaseURL: URL, key: String, value: String) throws {
+        let store = try TypingStore(databaseURL: databaseURL)
+        try store.setString(value, for: key)
     }
 }

@@ -60,7 +60,11 @@ final class AppModel {
         static let menuBarDisplayMode = "menuBarDisplayMode"
         static let hourlyRate = "hourlyRate"
         static let dayHistory = "dayHistory"
+        static let dismissedOnboarding = "dismissedOnboarding"
+        static let aiUsageSummaryCache = "aiUsageSummaryCache"
     }
+
+    private static let defaultHourlyRate: Double = 50
 
     private struct ActiveTypingSession {
         let startedAt: Date
@@ -114,6 +118,9 @@ final class AppModel {
     private(set) var aiUsageAvailable = false
     private(set) var diskHealthSummary: DiskHealthSummary = .zero
     private(set) var diskHealthAvailable = false
+    private(set) var wisprFlowSummary: WisprFlowSummary = .zero
+    private(set) var wisprFlowAvailable = false
+    private(set) var launchAtLoginStatus: LaunchAtLoginManager.StatusSummary = .unavailable
 
     let recoveryWindowManager = RecoveryWindowManager()
 
@@ -123,6 +130,7 @@ final class AppModel {
     private let mouseCaptureService = MouseCaptureService()
     private let aiUsageMonitor = AIUsageMonitor()
     private let diskHealthMonitor = DiskHealthMonitor()
+    private let wisprFlowMonitor = WisprFlowMonitor()
     private let typingStore: TypingStore?
 
     private var tickerTask: Task<Void, Never>?
@@ -136,20 +144,27 @@ final class AppModel {
     private var lastTypingCaptureRetryAt: Date?
     private var lastAIUsageRefreshRequestAt = Date.distantPast
     private var lastDiskHealthRefreshRequestAt = Date.distantPast
+    private var lastWisprFlowRefreshRequestAt = Date.distantPast
+    private var hasCachedAIUsageSummary = false
 
     private let typingIdleThreshold: TimeInterval = 5
     private let mouseIdleThreshold: TimeInterval = 2
     private let typingCaptureRetryInterval: TimeInterval = 5
     private let aiUsageRefreshInterval: TimeInterval = 3
     private let diskHealthRefreshInterval: TimeInterval = 60
+    private let wisprFlowRefreshInterval: TimeInterval = 30
+    private var dismissedOnboarding = false
 
     init(now: Date = .now, installsStatusItem: Bool = true, typingDatabaseURL: URL? = nil) {
         let typingStore = try? Self.makeTypingStore(enabled: installsStatusItem, databaseURL: typingDatabaseURL)
         let storedMode = (try? typingStore?.stringSetting(for: DefaultsKey.menuBarDisplayMode))
             ?? UserDefaults.standard.string(forKey: DefaultsKey.menuBarDisplayMode)
         let storedHourlyRate = (try? typingStore?.doubleSetting(for: DefaultsKey.hourlyRate))
-            ?? UserDefaults.standard.double(forKey: DefaultsKey.hourlyRate)
+            ?? ((UserDefaults.standard.object(forKey: DefaultsKey.hourlyRate) != nil)
+                ? UserDefaults.standard.double(forKey: DefaultsKey.hourlyRate)
+                : Self.defaultHourlyRate)
         let storedHistory = (try? typingStore?.loadDailySummaries()) ?? nil
+        let dismissedOnboarding = UserDefaults.standard.bool(forKey: DefaultsKey.dismissedOnboarding)
         let initialMode = MenuBarDisplayMode(rawValue: storedMode ?? "") ?? .elapsed
         let initialDayStart = Calendar.autoupdatingCurrent.startOfDay(for: now)
         let statusItemController = installsStatusItem ? StatusItemController() : nil
@@ -164,6 +179,13 @@ final class AppModel {
         self.runningSince = now
         self.statusItemController = statusItemController
         self.typingStore = typingStore
+        self.dismissedOnboarding = dismissedOnboarding
+        self.launchAtLoginStatus = installsStatusItem ? LaunchAtLoginManager.currentStatus() : .unavailable
+        if let cachedAIUsageSummary = Self.loadCachedAIUsageSummary(from: typingStore) {
+            self.aiUsageSummary = cachedAIUsageSummary
+            self.aiUsageAvailable = true
+            self.hasCachedAIUsageSummary = true
+        }
         if let typingStore {
             self.typingStoredSummary = (try? typingStore.typingSummary(from: initialDayStart, to: now)) ?? .zero
             self.typingPermissionState = .ready
@@ -209,14 +231,22 @@ final class AppModel {
         }
         aiUsageMonitor.onAvailabilityChange = { [weak self] isAvailable in
             Task { @MainActor in
-                self?.aiUsageAvailable = isAvailable
-                self?.refreshStatusItem()
+                guard let self else { return }
+                self.aiUsageAvailable = isAvailable || self.hasCachedAIUsageSummary
+                self.refreshStatusItem()
             }
         }
         aiUsageMonitor.onSummary = { [weak self] summary in
             Task { @MainActor in
-                self?.aiUsageSummary = summary
-                self?.refreshStatusItem()
+                guard let self else { return }
+                self.aiUsageSummary = Self.mergedAIUsageSummary(
+                    current: self.aiUsageSummary,
+                    incoming: summary
+                )
+                self.aiUsageAvailable = true
+                self.hasCachedAIUsageSummary = true
+                self.persistCachedAIUsageSummary(self.aiUsageSummary)
+                self.refreshStatusItem()
             }
         }
         diskHealthMonitor.onAvailabilityChange = { [weak self] isAvailable in
@@ -229,6 +259,16 @@ final class AppModel {
             Task { @MainActor in
                 self?.diskHealthSummary = summary
                 self?.refreshStatusItem()
+            }
+        }
+        wisprFlowMonitor.onAvailabilityChange = { [weak self] isAvailable in
+            Task { @MainActor in
+                self?.wisprFlowAvailable = isAvailable
+            }
+        }
+        wisprFlowMonitor.onSummary = { [weak self] summary in
+            Task { @MainActor in
+                self?.wisprFlowSummary = summary
             }
         }
 
@@ -553,16 +593,12 @@ final class AppModel {
 
     var aiTokensPerSecondText: String {
         guard aiUsageAvailable else { return "--" }
-        let displayRate: Double
-        if aiUsageSummary.lastMinuteAverageTokensPerSecond > 0 {
-            displayRate = aiUsageSummary.lastMinuteAverageTokensPerSecond
-        } else if aiUsageSummary.hasRecentSupersetSessionActivity,
-                  aiUsageSummary.lastFifteenMinutesAverageTokensPerSecond > 0 {
-            displayRate = aiUsageSummary.lastFifteenMinutesAverageTokensPerSecond
-        } else {
-            displayRate = aiUsageSummary.lastFiveMinutesAverageTokensPerSecond
-        }
+        let displayRate = Self.preferredAITokensPerSecondDisplay(for: aiUsageSummary)
         return "\(Self.formatTokensPerSecond(displayRate))/s"
+    }
+
+    var aiRateSeries: [Double] {
+        Self.smoothedAISeries(aiUsageSummary.lastThirtyMinutesRateSeries)
     }
 
     var aiCodexTokensText: String {
@@ -614,6 +650,66 @@ final class AppModel {
         return diskHealthSummary.powerOnText
     }
 
+    var shouldShowOnboardingCard: Bool {
+        !dismissedOnboarding || !isInstalledInApplications || needsTypingPermissions || launchAtLoginStatus != .enabled
+    }
+
+    var onboardingStatusLabel: String {
+        if !isInstalledInApplications {
+            return "Needs Setup"
+        }
+        if needsTypingPermissions {
+            return "Permissions"
+        }
+        if launchAtLoginStatus != .enabled {
+            return "Login Item"
+        }
+        return "Ready"
+    }
+
+    var onboardingChecklist: [(title: String, detail: String, complete: Bool)] {
+        [
+            (
+                title: "Move to Applications",
+                detail: isInstalledInApplications
+                    ? "WorkTimer is installed in Applications."
+                    : "Move WorkTimer.app into Applications first so macOS keeps permissions stable.",
+                complete: isInstalledInApplications
+            ),
+            (
+                title: "Grant typing + mouse access",
+                detail: needsTypingPermissions
+                    ? typingStatusDetail
+                    : "Accessibility and Input Monitoring are ready.",
+                complete: !needsTypingPermissions
+            ),
+            (
+                title: "Approve launch at login",
+                detail: launchAtLoginStatus.detail,
+                complete: launchAtLoginStatus == .enabled
+            ),
+        ]
+    }
+
+    var wisprFlowStatusLabel: String {
+        wisprFlowAvailable ? "Live" : "Unavailable"
+    }
+
+    var wisprWordsTodayText: String {
+        guard wisprFlowAvailable else { return "--" }
+        return wisprFlowSummary.wordsTodayText
+    }
+
+    var wisprDictationDurationTodayText: String {
+        guard wisprFlowAvailable else { return "--" }
+        return wisprFlowSummary.dictationDurationTodayText
+    }
+
+    var wisprClipsTodayText: String {
+        guard wisprFlowAvailable else { return "--" }
+        return wisprFlowSummary.clipsTodayText
+    }
+
     var showIconOnly: Bool {
         get { menuBarDisplayMode == .iconOnly }
         set { menuBarDisplayMode = newValue ? .iconOnly : .elapsed }
@@ -631,6 +727,7 @@ final class AppModel {
             "Current pay: \(currentEarningsText)",
             "Mouse travel: \(mouseDistanceText)",
             "Mouse time: \(mouseMoveTimeText)",
+            "Wispr words today: \(wisprWordsTodayText)",
             "Active share: \(activeShareText)",
             "Resets: \(resetCount)",
             "Actions logged: \(actionCount)",
@@ -654,12 +751,20 @@ final class AppModel {
         startMouseCapture()
         aiUsageMonitor.start()
         diskHealthMonitor.start()
+        wisprFlowMonitor.start()
+        if statusItemController != nil {
+            refreshLaunchAtLoginStatus()
+        }
 
         tickerTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 await self.tick()
             }
+        }
+
+        if shouldAutoOpenOnLaunch {
+            openControlPanel()
         }
     }
 
@@ -765,6 +870,10 @@ final class AppModel {
     }
 
     func requestTypingPermissions() {
+        guard isInstalledInApplications else {
+            openApplicationsFolder()
+            return
+        }
         refreshTypingCapture(promptIfNeeded: true, revealPanelOnFailure: true)
         openTypingPermissionPanes()
     }
@@ -792,6 +901,16 @@ final class AppModel {
         }
 
         NSWorkspace.shared.open(targetURL)
+    }
+
+    func openLoginItemsSettings() {
+        let loginItemsURL = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!
+        NSWorkspace.shared.open(loginItemsURL)
+    }
+
+    func dismissOnboarding() {
+        dismissedOnboarding = true
+        UserDefaults.standard.set(true, forKey: DefaultsKey.dismissedOnboarding)
     }
 
     func recordTypingInput(_ input: TypingInput, at now: Date = .now) {
@@ -863,6 +982,21 @@ final class AppModel {
             lastDiskHealthRefreshRequestAt = now
             diskHealthMonitor.tick()
         }
+        if now.timeIntervalSince(lastWisprFlowRefreshRequestAt) >= wisprFlowRefreshInterval {
+            lastWisprFlowRefreshRequestAt = now
+            wisprFlowMonitor.tick()
+        }
+        if statusItemController != nil {
+            refreshLaunchAtLoginStatus()
+        }
+    }
+
+    private var shouldAutoOpenOnLaunch: Bool {
+        !dismissedOnboarding
+    }
+
+    private func refreshLaunchAtLoginStatus() {
+        launchAtLoginStatus = LaunchAtLoginManager.currentStatus()
     }
 
     private func updateCurrentTime(_ now: Date) {
@@ -975,7 +1109,7 @@ final class AppModel {
     }
 
     private func startTypingCapture() {
-        refreshTypingCapture(promptIfNeeded: true, revealPanelOnFailure: true)
+        refreshTypingCapture(promptIfNeeded: false, revealPanelOnFailure: false)
     }
 
     private func startMouseCapture() {
@@ -1215,6 +1349,17 @@ final class AppModel {
         }
     }
 
+    private func persistCachedAIUsageSummary(_ summary: AIUsageSummary) {
+        guard let data = try? JSONEncoder().encode(summary),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(string, forKey: DefaultsKey.aiUsageSummaryCache)
+        try? typingStore?.setString(string, for: DefaultsKey.aiUsageSummaryCache)
+    }
+
     private static func loadLegacyHistory() -> [DailyWorkSummary] {
         guard let data = UserDefaults.standard.data(forKey: DefaultsKey.dayHistory),
               let summaries = try? JSONDecoder().decode([DailyWorkSummary].self, from: data)
@@ -1233,6 +1378,18 @@ final class AppModel {
         }
 
         return session
+    }
+
+    private static func loadCachedAIUsageSummary(from typingStore: TypingStore?) -> AIUsageSummary? {
+        let cachedString = (try? typingStore?.stringSetting(for: DefaultsKey.aiUsageSummaryCache))
+            ?? UserDefaults.standard.string(forKey: DefaultsKey.aiUsageSummaryCache)
+        guard let cachedString,
+              let data = cachedString.data(using: .utf8),
+              let summary = try? JSONDecoder().decode(AIUsageSummary.self, from: data)
+        else {
+            return nil
+        }
+        return summary
     }
 
     private static func makeTypingStore(enabled: Bool, databaseURL: URL?) throws -> TypingStore? {
@@ -1398,7 +1555,11 @@ final class AppModel {
     nonisolated static func formatTokensPerSecond(_ value: Double) -> String {
         let safeValue = max(0, value)
         switch safeValue {
-        case 0..<0.1:
+        case 0:
+            return "0.00"
+        case 0..<0.01:
+            return "<0.01"
+        case 0.01..<0.1:
             return String(format: "%.2f", safeValue)
         case 0.1..<10:
             return String(format: "%.1f", safeValue)
@@ -1414,6 +1575,94 @@ final class AppModel {
             let billions = safeValue / 1_000_000_000
             return String(format: billions >= 10 ? "%.0fB" : "%.2fB", billions)
         }
+    }
+
+    nonisolated static func preferredAITokensPerSecondDisplay(for summary: AIUsageSummary) -> Double {
+        let oneMinute = max(0, summary.lastMinuteAverageTokensPerSecond)
+        let fiveMinutes = max(0, summary.lastFiveMinutesAverageTokensPerSecond)
+        let fifteenMinutes = max(0, summary.lastFifteenMinutesAverageTokensPerSecond)
+        let hour = max(0, summary.lastHourAverageTokensPerSecond)
+        let visibleThreshold = 0.01
+
+        if oneMinute >= visibleThreshold {
+            return oneMinute
+        }
+
+        var candidates = [oneMinute, fiveMinutes, hour]
+        if summary.hasRecentSupersetSessionActivity {
+            candidates.append(fifteenMinutes)
+        }
+
+        let positiveCandidates = candidates.filter { $0 > 0 }
+        return positiveCandidates.max() ?? 0
+    }
+
+    nonisolated static func mergedAIUsageSummary(current: AIUsageSummary, incoming: AIUsageSummary) -> AIUsageSummary {
+        guard shouldPreserveCurrentAIRates(current: current, incoming: incoming) else {
+            return incoming
+        }
+
+        return AIUsageSummary(
+            combined: incoming.combined,
+            codex: incoming.codex,
+            claude: incoming.claude,
+            lastMinuteAverageTokensPerSecond: current.lastMinuteAverageTokensPerSecond,
+            lastFiveMinutesAverageTokensPerSecond: current.lastFiveMinutesAverageTokensPerSecond,
+            lastFifteenMinutesAverageTokensPerSecond: current.lastFifteenMinutesAverageTokensPerSecond,
+            lastHourAverageTokensPerSecond: current.lastHourAverageTokensPerSecond,
+            lastThirtyMinutesRateSeries: current.lastThirtyMinutesRateSeries,
+            hasRecentSupersetSessionActivity: incoming.hasRecentSupersetSessionActivity || current.hasRecentSupersetSessionActivity,
+            watchedCodexFiles: incoming.watchedCodexFiles,
+            watchedClaudeFiles: incoming.watchedClaudeFiles
+        )
+    }
+
+    private nonisolated static func shouldPreserveCurrentAIRates(current: AIUsageSummary, incoming: AIUsageSummary) -> Bool {
+        guard incoming.hasRecentSupersetSessionActivity else {
+            return false
+        }
+
+        let incomingLooksIdle =
+            incoming.lastMinuteAverageTokensPerSecond <= 0 &&
+            incoming.lastFiveMinutesAverageTokensPerSecond <= 0 &&
+            incoming.lastFifteenMinutesAverageTokensPerSecond <= 0 &&
+            incoming.lastHourAverageTokensPerSecond <= 0 &&
+            incoming.lastThirtyMinutesRateSeries.allSatisfy { $0 <= 0 }
+        guard incomingLooksIdle else {
+            return false
+        }
+
+        let currentHasSignal =
+            current.lastMinuteAverageTokensPerSecond > 0 ||
+            current.lastFiveMinutesAverageTokensPerSecond > 0 ||
+            current.lastFifteenMinutesAverageTokensPerSecond > 0 ||
+            current.lastHourAverageTokensPerSecond > 0 ||
+            current.lastThirtyMinutesRateSeries.contains(where: { $0 > 0 })
+        guard currentHasSignal else {
+            return false
+        }
+
+        return incoming.combined.tokens >= current.combined.tokens
+    }
+
+    nonisolated static func smoothedAISeries(_ values: [Double]) -> [Double] {
+        guard !values.isEmpty else {
+            return []
+        }
+
+        var smoothed: [Double] = []
+        smoothed.reserveCapacity(values.count)
+        var previous = max(0, values[0])
+        smoothed.append(previous)
+
+        for value in values.dropFirst() {
+            let safeValue = max(0, value)
+            let blended = (previous * 0.72) + (safeValue * 0.28)
+            smoothed.append(blended)
+            previous = blended
+        }
+
+        return smoothed
     }
 
     private static let timestampFormatter: DateFormatter = {

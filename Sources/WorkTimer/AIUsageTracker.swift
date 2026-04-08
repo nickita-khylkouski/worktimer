@@ -1,17 +1,19 @@
 import Foundation
 
-struct AIUsageComponentSummary: Equatable, Sendable {
+struct AIUsageComponentSummary: Equatable, Sendable, Codable {
     let tokens: Int64
     let todayTokens: Int64
 }
 
-struct AIUsageSummary: Equatable, Sendable {
+struct AIUsageSummary: Equatable, Sendable, Codable {
     let combined: AIUsageComponentSummary
     let codex: AIUsageComponentSummary
     let claude: AIUsageComponentSummary
     let lastMinuteAverageTokensPerSecond: Double
     let lastFiveMinutesAverageTokensPerSecond: Double
     let lastFifteenMinutesAverageTokensPerSecond: Double
+    let lastHourAverageTokensPerSecond: Double
+    let lastThirtyMinutesRateSeries: [Double]
     let hasRecentSupersetSessionActivity: Bool
     let watchedCodexFiles: Int
     let watchedClaudeFiles: Int
@@ -23,6 +25,8 @@ struct AIUsageSummary: Equatable, Sendable {
         lastMinuteAverageTokensPerSecond: 0,
         lastFiveMinutesAverageTokensPerSecond: 0,
         lastFifteenMinutesAverageTokensPerSecond: 0,
+        lastHourAverageTokensPerSecond: 0,
+        lastThirtyMinutesRateSeries: Array(repeating: 0, count: 30),
         hasRecentSupersetSessionActivity: false,
         watchedCodexFiles: 0,
         watchedClaudeFiles: 0
@@ -59,7 +63,7 @@ private struct AIRateSample {
 }
 
 final class AIUsageTracker {
-    let siteRoot: URL
+    let siteRoot: URL?
     let codexRoot: URL
     let claudeRoot: URL
     let supersetSessionLogRoot: URL
@@ -67,8 +71,8 @@ final class AIUsageTracker {
     private let fileManager = FileManager.default
     private let now: () -> Date
 
-    private let codexUsageURL: URL
-    private let claudeUsageURL: URL
+    private let codexUsageURL: URL?
+    private let claudeUsageURL: URL?
 
     private let codexSnapshot: AIUsageSnapshotTotals
     private let claudeSnapshot: AIUsageSnapshotTotals
@@ -88,31 +92,49 @@ final class AIUsageTracker {
     private var lastClaudeDiscovery = Date.distantPast
     private var rateSamples: [AIRateSample] = []
 
+    private let codexDiscoveryLookback: TimeInterval = 60 * 60 * 24 * 2
+    private let claudeDiscoveryLookback: TimeInterval = 60 * 60 * 24 * 7
+    private let codexDiscoveryInterval: TimeInterval = 30
+    private let claudeDiscoveryInterval: TimeInterval = 30
+    private let codexBootstrapFileLimit = 12
+    private let codexIncrementalFileLimit = 16
+
     private let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    init(siteRoot: URL, codexRoot: URL? = nil, claudeRoot: URL? = nil, supersetSessionLogRoot: URL? = nil, now: @escaping () -> Date = Date.init) throws {
-        self.siteRoot = siteRoot
-        self.codexRoot = codexRoot ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
-        self.claudeRoot = claudeRoot ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects", isDirectory: true)
-        self.supersetSessionLogRoot = supersetSessionLogRoot ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".superset/session-logs", isDirectory: true)
+    init(siteRoot: URL? = nil, codexRoot: URL? = nil, claudeRoot: URL? = nil, supersetSessionLogRoot: URL? = nil, now: @escaping () -> Date = Date.init) throws {
+        let resolvedSiteRoot = siteRoot ?? Self.defaultSiteRoot()
+        self.siteRoot = resolvedSiteRoot
+        self.codexRoot = codexRoot ?? Self.defaultCodexRoot()
+        self.claudeRoot = claudeRoot ?? Self.defaultClaudeRoot()
+        self.supersetSessionLogRoot = supersetSessionLogRoot ?? Self.defaultSupersetSessionLogRoot()
         self.now = now
 
-        codexUsageURL = siteRoot.appendingPathComponent("usage-data/codex-usage.json", isDirectory: false)
-        claudeUsageURL = siteRoot.appendingPathComponent("usage-data/claude-usage.json", isDirectory: false)
+        codexUsageURL = resolvedSiteRoot.flatMap { Self.resolveSnapshotURL(in: $0, fileName: "codex-usage.json") }
+        claudeUsageURL = resolvedSiteRoot.flatMap { Self.resolveSnapshotURL(in: $0, fileName: "claude-usage.json") }
 
-        codexSnapshot = try Self.loadSnapshot(from: codexUsageURL, tokenKey: "totalTokens", costKey: "costUSD")
-        claudeSnapshot = try Self.loadSnapshot(from: claudeUsageURL, tokenKey: "totalTokens", costKey: "totalCost")
-        codexCutoffDate = try Self.modificationDate(for: codexUsageURL)
-        claudeCutoffDate = try Self.modificationDate(for: claudeUsageURL)
-        codexTodaySnapshotTokens = try Self.loadTodayTokens(from: codexUsageURL, now: now)
-        claudeTodaySnapshotTokens = try Self.loadTodayTokens(from: claudeUsageURL, now: now)
+        if let codexUsageURL {
+            codexSnapshot = try Self.loadSnapshot(from: codexUsageURL, tokenKey: "totalTokens", costKey: "costUSD")
+            codexCutoffDate = try Self.modificationDate(for: codexUsageURL)
+            codexTodaySnapshotTokens = try Self.loadTodayTokens(from: codexUsageURL, now: now)
+        } else {
+            codexSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
+            codexCutoffDate = .distantPast
+            codexTodaySnapshotTokens = 0
+        }
+
+        if let claudeUsageURL {
+            claudeSnapshot = try Self.loadSnapshot(from: claudeUsageURL, tokenKey: "totalTokens", costKey: "totalCost")
+            claudeCutoffDate = try Self.modificationDate(for: claudeUsageURL)
+            claudeTodaySnapshotTokens = try Self.loadTodayTokens(from: claudeUsageURL, now: now)
+        } else {
+            claudeSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
+            claudeCutoffDate = .distantPast
+            claudeTodaySnapshotTokens = 0
+        }
     }
 
     func bootstrap() throws {
@@ -139,6 +161,8 @@ final class AIUsageTracker {
             lastMinuteAverageTokensPerSecond: averageTokensPerSecond(within: 60),
             lastFiveMinutesAverageTokensPerSecond: averageTokensPerSecond(within: 300),
             lastFifteenMinutesAverageTokensPerSecond: averageTokensPerSecond(within: 900),
+            lastHourAverageTokensPerSecond: averageTokensPerSecond(within: 3_600),
+            lastThirtyMinutesRateSeries: rateSeries(within: 1_800, bucketCount: 30),
             hasRecentSupersetSessionActivity: hasRecentSupersetSessionActivity(within: 120),
             watchedCodexFiles: codexFiles.count,
             watchedClaudeFiles: claudeFiles.count
@@ -148,27 +172,107 @@ final class AIUsageTracker {
     static func defaultSiteRoot() -> URL? {
         if let override = ProcessInfo.processInfo.environment["WORKTIMER_AI_USAGE_SITE_ROOT"], !override.isEmpty {
             let url = URL(fileURLWithPath: override, isDirectory: true)
+            if resolveSnapshotURL(in: url, fileName: "codex-usage.json") != nil {
+                return url
+            }
+        }
+
+        let fileManager = FileManager.default
+        var candidates: [URL] = []
+
+        let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+        candidates.append(currentDirectory)
+        candidates.append(currentDirectory.deletingLastPathComponent())
+        candidates.append(fileManager.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true))
+        candidates.append(fileManager.homeDirectoryForCurrentUser.appendingPathComponent("code/nickita-khylkouski.github.io", isDirectory: true))
+
+        if let codeRoots = try? fileManager.contentsOfDirectory(
+            at: fileManager.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            candidates.append(contentsOf: codeRoots)
+        }
+
+        return candidates.first { resolveSnapshotURL(in: $0, fileName: "codex-usage.json") != nil }
+    }
+
+    static func defaultCodexRoot() -> URL {
+        if let override = ProcessInfo.processInfo.environment["WORKTIMER_CODEX_ROOT"], !override.isEmpty {
+            let url = normalizeSessionsRoot(URL(fileURLWithPath: override, isDirectory: true))
             if FileManager.default.fileExists(atPath: url.path) {
                 return url
             }
         }
 
-        let candidates = [
-            URL(fileURLWithPath: "/Users/nickita/code/nickita-khylkouski.github.io", isDirectory: true),
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("code/nickita-khylkouski.github.io", isDirectory: true),
-        ]
+        if let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"], !codexHome.isEmpty {
+            let url = normalizeSessionsRoot(URL(fileURLWithPath: codexHome, isDirectory: true))
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
 
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let primaryRoot = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        if latestJSONLModificationDate(in: primaryRoot) != nil {
+            return primaryRoot
+        }
+
+        var candidates: [URL] = [primaryRoot]
+
+        let supersetWorktrees = home.appendingPathComponent(".superset/worktrees", isDirectory: true)
+        if let enumerator = fileManager.enumerator(
+            at: supersetWorktrees,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let url as URL in enumerator {
+                guard url.lastPathComponent == "sessions", url.path.contains(".codex-isolated-home/.codex/sessions") else {
+                    continue
+                }
+                candidates.append(url)
+            }
+        }
+
+        return freshestExistingRoot(from: candidates) ?? candidates[0]
+    }
+
+    static func defaultClaudeRoot() -> URL {
+        if let override = ProcessInfo.processInfo.environment["WORKTIMER_CLAUDE_ROOT"], !override.isEmpty {
+            let url = URL(fileURLWithPath: override, isDirectory: true)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects", isDirectory: true)
+    }
+
+    static func defaultSupersetSessionLogRoot() -> URL {
+        if let override = ProcessInfo.processInfo.environment["WORKTIMER_SUPERSET_LOG_ROOT"], !override.isEmpty {
+            let url = URL(fileURLWithPath: override, isDirectory: true)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".superset/session-logs", isDirectory: true)
     }
 
     private func discoverCodex(force: Bool) throws {
-        if !force, now().timeIntervalSince(lastCodexDiscovery) < 2 {
+        if !force, now().timeIntervalSince(lastCodexDiscovery) < codexDiscoveryInterval {
             return
         }
         lastCodexDiscovery = now()
 
-        let candidates = try enumerateRecentJSONLFiles(root: codexRoot, cutoff: codexCutoffDate.addingTimeInterval(-2), limit: 24)
+        let candidates = try enumerateRecentJSONLFiles(
+            root: codexRoot,
+            cutoff: now().addingTimeInterval(-codexDiscoveryLookback),
+            limit: force ? codexBootstrapFileLimit : codexIncrementalFileLimit
+        )
         for candidate in candidates where codexFiles[candidate.url] == nil {
             let tracked = AITrackedFile(url: candidate.url)
             codexFiles[candidate.url] = tracked
@@ -177,12 +281,16 @@ final class AIUsageTracker {
     }
 
     private func discoverClaude(force: Bool) throws {
-        if !force, now().timeIntervalSince(lastClaudeDiscovery) < 10 {
+        if !force, now().timeIntervalSince(lastClaudeDiscovery) < claudeDiscoveryInterval {
             return
         }
         lastClaudeDiscovery = now()
 
-        let candidates = try enumerateRecentJSONLFiles(root: claudeRoot, cutoff: claudeCutoffDate.addingTimeInterval(-2), limit: 32)
+        let candidates = try enumerateRecentJSONLFiles(
+            root: claudeRoot,
+            cutoff: now().addingTimeInterval(-claudeDiscoveryLookback),
+            limit: 64
+        )
         for candidate in candidates where claudeFiles[candidate.url] == nil {
             let tracked = AITrackedFile(url: candidate.url)
             claudeFiles[candidate.url] = tracked
@@ -258,7 +366,7 @@ final class AIUsageTracker {
         for line in completeLines(for: tracked, chunk: chunk) {
             guard
                 let data = line.data(using: .utf8),
-                let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                 let timestampString = object["timestamp"] as? String,
                 let timestamp = parseTimestamp(timestampString)
             else {
@@ -284,14 +392,16 @@ final class AIUsageTracker {
             if let totalUsage {
                 tracked.previousCodexTotal = totalUsage
             }
-            guard let raw, timestamp > codexCutoffDate, raw.totalTokens > 0 else {
+            guard let raw, raw.totalTokens > 0 else {
                 continue
             }
 
-            codexLiveTokens += raw.totalTokens
             recordRateSample(at: timestamp, tokenDelta: raw.totalTokens)
-            if Calendar.current.isDate(timestamp, inSameDayAs: now()) {
-                codexLiveTodayTokens += raw.totalTokens
+            if timestamp > codexCutoffDate {
+                codexLiveTokens += raw.totalTokens
+                if Calendar.current.isDate(timestamp, inSameDayAs: now()) {
+                    codexLiveTodayTokens += raw.totalTokens
+                }
             }
         }
     }
@@ -300,10 +410,9 @@ final class AIUsageTracker {
         for line in completeLines(for: tracked, chunk: chunk) {
             guard
                 let data = line.data(using: .utf8),
-                let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                 let timestampString = object["timestamp"] as? String,
                 let timestamp = parseTimestamp(timestampString),
-                timestamp > claudeCutoffDate,
                 let message = object["message"] as? [String: Any],
                 let usage = message["usage"] as? [String: Any]
             else {
@@ -316,10 +425,12 @@ final class AIUsageTracker {
                 Self.int64(usage["cache_creation_input_tokens"]) +
                 Self.int64(usage["cache_read_input_tokens"])
             guard total > 0 else { continue }
-            claudeLiveTokens += total
             recordRateSample(at: timestamp, tokenDelta: total)
-            if Calendar.current.isDate(timestamp, inSameDayAs: now()) {
-                claudeLiveTodayTokens += total
+            if timestamp > claudeCutoffDate {
+                claudeLiveTokens += total
+                if Calendar.current.isDate(timestamp, inSameDayAs: now()) {
+                    claudeLiveTodayTokens += total
+                }
             }
         }
     }
@@ -340,7 +451,7 @@ final class AIUsageTracker {
         let output = int64(dict["output_tokens"])
         let reasoning = int64(dict["reasoning_output_tokens"])
         let explicitTotal = int64(dict["total_tokens"])
-        let total = explicitTotal > 0 ? explicitTotal : (input + output)
+        let total = explicitTotal > 0 ? explicitTotal : (input + cached + output + reasoning)
         return CodexRawUsage(
             inputTokens: input,
             cachedInputTokens: cached,
@@ -411,6 +522,67 @@ final class AIUsageTracker {
         return values.contentModificationDate ?? .distantPast
     }
 
+    private static func resolveSnapshotURL(in root: URL, fileName: String) -> URL? {
+        let candidates = [
+            root.appendingPathComponent("usage-data/\(fileName)", isDirectory: false),
+            root.appendingPathComponent("web/src/data/\(fileName)", isDirectory: false),
+            root.appendingPathComponent("src/data/\(fileName)", isDirectory: false),
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private static func freshestExistingRoot(from candidates: [URL]) -> URL? {
+        let fileManager = FileManager.default
+        var bestRoot: URL?
+        var bestDate = Date.distantPast
+
+        for candidate in candidates {
+            guard fileManager.fileExists(atPath: candidate.path),
+                  let date = latestJSONLModificationDate(in: candidate),
+                  date > bestDate
+            else {
+                continue
+            }
+            bestDate = date
+            bestRoot = candidate
+        }
+
+        return bestRoot
+    }
+
+    private static func latestJSONLModificationDate(in root: URL) -> Date? {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        var latest: Date?
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
+            guard values?.isRegularFile == true, let modifiedAt = values?.contentModificationDate else {
+                continue
+            }
+            if latest == nil || modifiedAt > latest! {
+                latest = modifiedAt
+            }
+        }
+        return latest
+    }
+
+    private static func normalizeSessionsRoot(_ url: URL) -> URL {
+        if url.lastPathComponent == "sessions" {
+            return url
+        }
+        if url.lastPathComponent == ".codex" {
+            return url.appendingPathComponent("sessions", isDirectory: true)
+        }
+        return url
+    }
+
     private static func int64(_ value: Any?) -> Int64 {
         switch value {
         case let int as Int:
@@ -446,7 +618,7 @@ final class AIUsageTracker {
     private func recordRateSample(at date: Date, tokenDelta: Int64) {
         let sample = AIRateSample(date: date, tokenDelta: max(tokenDelta, 0))
         rateSamples.append(sample)
-        let cutoff = now().addingTimeInterval(-900)
+        let cutoff = now().addingTimeInterval(-3_600)
         rateSamples.removeAll { $0.date < cutoff }
     }
 
@@ -464,6 +636,28 @@ final class AIUsageTracker {
         }
         let elapsed = max(now().timeIntervalSince(first.date), 1)
         return Double(total) / elapsed
+    }
+
+    private func rateSeries(within interval: TimeInterval, bucketCount: Int) -> [Double] {
+        guard bucketCount > 0 else {
+            return []
+        }
+
+        let end = now()
+        let start = end.addingTimeInterval(-interval)
+        let bucketDuration = interval / Double(bucketCount)
+        guard bucketDuration > 0 else {
+            return Array(repeating: 0, count: bucketCount)
+        }
+
+        var buckets = Array(repeating: Double(0), count: bucketCount)
+        for sample in rateSamples where sample.date >= start && sample.date <= end {
+            let rawIndex = Int(sample.date.timeIntervalSince(start) / bucketDuration)
+            let index = max(0, min(bucketCount - 1, rawIndex))
+            buckets[index] += Double(max(sample.tokenDelta, 0))
+        }
+
+        return buckets.map { $0 / bucketDuration }
     }
 
     private func hasRecentSupersetSessionActivity(within interval: TimeInterval) -> Bool {
@@ -516,24 +710,15 @@ final class AIUsageMonitor: @unchecked Sendable {
     func start() {
         queue.async { [weak self] in
             guard let self else { return }
-            guard let siteRoot = AIUsageTracker.defaultSiteRoot() else {
-                DispatchQueue.main.async {
-                    self.onAvailabilityChange?(false)
-                }
-                return
-            }
-
             do {
-                let tracker = try AIUsageTracker(siteRoot: siteRoot)
-                try tracker.bootstrap()
-                let summary = tracker.summary()
-                self.tracker = tracker
+                let summary = try self.bootstrapTrackerIfNeeded(force: true)
                 self.lastRefreshAt = Date()
                 DispatchQueue.main.async {
                     self.onAvailabilityChange?(true)
                     self.onSummary?(summary)
                 }
             } catch {
+                DebugTrace.log("AIUsageMonitor start failed error=\(String(describing: error))")
                 DispatchQueue.main.async {
                     self.onAvailabilityChange?(false)
                 }
@@ -543,7 +728,7 @@ final class AIUsageMonitor: @unchecked Sendable {
 
     func tick() {
         queue.async { [weak self] in
-            guard let self, let tracker = self.tracker, !self.tickInFlight else { return }
+            guard let self, !self.tickInFlight else { return }
             let now = Date()
             guard now.timeIntervalSince(self.lastRefreshAt) >= self.minimumRefreshInterval else {
                 return
@@ -553,16 +738,36 @@ final class AIUsageMonitor: @unchecked Sendable {
             defer { self.tickInFlight = false }
 
             do {
+                let tracker = try self.tracker ?? self.makeTracker()
                 try tracker.tick()
                 let summary = tracker.summary()
+                self.tracker = tracker
                 DispatchQueue.main.async {
+                    self.onAvailabilityChange?(true)
                     self.onSummary?(summary)
                 }
             } catch {
+                self.tracker = nil
+                DebugTrace.log("AIUsageMonitor tick failed error=\(String(describing: error))")
                 DispatchQueue.main.async {
                     self.onAvailabilityChange?(false)
                 }
             }
         }
+    }
+
+    private func bootstrapTrackerIfNeeded(force: Bool) throws -> AIUsageSummary {
+        if !force, let tracker {
+            return tracker.summary()
+        }
+
+        let tracker = try makeTracker()
+        try tracker.bootstrap()
+        self.tracker = tracker
+        return tracker.summary()
+    }
+
+    private func makeTracker() throws -> AIUsageTracker {
+        try AIUsageTracker()
     }
 }

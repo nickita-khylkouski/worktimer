@@ -3,8 +3,8 @@ import Foundation
 
 @MainActor
 final class StatusItemController: NSObject {
-    private static let runningIcon = loadIcon(named: "StatusIconRunning")
-    private static let pausedIcon = loadIcon(named: "StatusIconPaused")
+    private static let runningIcon = loadTemplateIcon(named: "StatusIconRunning")
+    private static let pausedIcon = loadTintedIcon(named: "StatusIconPaused", color: .systemRed)
 
     var onLeftClick: (() -> Void)?
     var onDoubleLeftClick: (() -> Void)?
@@ -17,6 +17,7 @@ final class StatusItemController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var pendingLeftClickWorkItem: DispatchWorkItem?
     private var lastLeftClickTimestamp: TimeInterval?
+    private var lastCommittedLeftClickTimestamp: TimeInterval?
 
     override init() {
         super.init()
@@ -45,6 +46,7 @@ final class StatusItemController: NSObject {
         if displayMode == .iconOnly {
             statusItem.length = NSStatusItem.squareLength
             button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
             button.font = nil
             button.image = isRunning ? Self.runningIcon : Self.pausedIcon
             button.imagePosition = .imageOnly
@@ -58,33 +60,51 @@ final class StatusItemController: NSObject {
         statusItem.length = max(64, width + 14)
         button.image = nil
         button.imagePosition = .noImage
-        button.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        button.font = font
         button.title = displayText
-        button.contentTintColor = isRunning ? .labelColor : .secondaryLabelColor
+        button.attributedTitle = NSAttributedString(
+            string: displayText,
+            attributes: [
+                .font: font,
+                .foregroundColor: isRunning ? NSColor.labelColor : NSColor.systemRed,
+            ]
+        )
+        button.contentTintColor = isRunning ? nil : .systemRed
         button.sizeToFit()
         DebugTrace.log("StatusItemController expanded width=\(button.frame.width) statusLength=\(statusItem.length)")
     }
 
     @objc
-    private func handleClick() {
+    private func handleButtonAction() {
         guard let event = NSApp.currentEvent else {
             onLeftClick?()
             return
         }
 
         switch event.type {
-        case .rightMouseDown:
+        case .rightMouseDown, .rightMouseUp:
+            DebugTrace.log("StatusItemController handleRightClick type=\(event.type.rawValue) timestamp=\(event.timestamp)")
             cancelPendingLeftClick()
             onRightClick?()
         case .leftMouseUp:
+            DebugTrace.log("StatusItemController handleLeftClick clickCount=\(event.clickCount) timestamp=\(event.timestamp)")
             handleLeftMouseUp(event)
         default:
-            onLeftClick?()
+            DebugTrace.log("StatusItemController ignored event type=\(event.type.rawValue)")
         }
     }
 
     private func handleLeftMouseUp(_ event: NSEvent) {
-        let forgivingDoubleClickInterval = max(NSEvent.doubleClickInterval, 0.45)
+        let forgivingDoubleClickInterval = min(max(NSEvent.doubleClickInterval * 0.55, 0.18), 0.28)
+
+        if let lastCommittedLeftClickTimestamp,
+           (event.timestamp - lastCommittedLeftClickTimestamp) < 0.35
+        {
+            DebugTrace.log("StatusItemController ignored rapid repeat left click")
+            return
+        }
+
         let happenedQuicklyAfterFirstClick = {
             guard let lastLeftClickTimestamp else {
                 return false
@@ -102,6 +122,8 @@ final class StatusItemController: NSObject {
         let workItem = DispatchWorkItem { [weak self] in
             self?.pendingLeftClickWorkItem = nil
             self?.lastLeftClickTimestamp = nil
+            self?.lastCommittedLeftClickTimestamp = event.timestamp
+            DebugTrace.log("StatusItemController committed single left click")
             self?.onLeftClick?()
         }
         pendingLeftClickWorkItem = workItem
@@ -120,10 +142,9 @@ final class StatusItemController: NSObject {
             return
         }
         DebugTrace.log("StatusItemController configureButton button-ok")
-
         button.target = self
-        button.action = #selector(handleClick)
-        button.sendAction(on: [.leftMouseUp, .rightMouseDown])
+        button.action = #selector(handleButtonAction)
+        button.sendAction(on: [.leftMouseUp, .rightMouseDown, .rightMouseUp])
     }
 
     private func textWidth(for text: String, font: NSFont) -> CGFloat {
@@ -133,14 +154,32 @@ final class StatusItemController: NSObject {
         return NSAttributedString(string: text, attributes: attributes).size().width
     }
 
-    private static func loadIcon(named name: String) -> NSImage? {
+    private static func loadTemplateIcon(named name: String) -> NSImage? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
               let image = NSImage(contentsOf: url)
         else {
             return nil
         }
 
-        image.isTemplate = false
+        image.isTemplate = true
         return image
+    }
+
+    private static func loadTintedIcon(named name: String, color: NSColor) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
+              let sourceImage = NSImage(contentsOf: url)
+        else {
+            return nil
+        }
+
+        let tintedImage = NSImage(size: sourceImage.size)
+        tintedImage.lockFocus()
+        let bounds = NSRect(origin: .zero, size: sourceImage.size)
+        sourceImage.draw(in: bounds)
+        color.set()
+        bounds.fill(using: .sourceAtop)
+        tintedImage.unlockFocus()
+        tintedImage.isTemplate = false
+        return tintedImage
     }
 }

@@ -11,11 +11,15 @@ struct TimerPanelView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 headerCard
+                payCard
+                if model.shouldShowOnboardingCard {
+                    onboardingCard
+                }
+                topBarCard
                 controlsRow
                 typingCard
                 aiCard
                 diskCard
-                payCard
                 historyCard
                 logCard
             }
@@ -54,6 +58,72 @@ struct TimerPanelView: View {
         .onExitCommand {
             model.hideControlPanel()
         }
+    }
+
+    private var onboardingCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel("Setup")
+                Spacer()
+                Text(model.onboardingStatusLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+                Button("Hide") {
+                    model.dismissOnboarding()
+                }
+                .buttonStyle(TextPanelButtonStyle())
+            }
+
+            Text("New users should follow this once: move the app into Applications, grant access from here, then confirm login-item approval if macOS asks.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.56))
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(model.onboardingChecklist.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(item.complete ? "Done" : "Next")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(item.complete ? .black : .white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(item.complete ? Color.white : Color.white.opacity(0.08))
+                            .clipShape(Capsule())
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(item.detail)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.56))
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                if !model.isInstalledInApplications {
+                    Button("Applications") {
+                        model.openApplicationsFolder()
+                    }
+                    .buttonStyle(SecondaryPanelButtonStyle())
+                }
+
+                if model.needsTypingPermissions {
+                    Button("Grant Access") {
+                        model.requestTypingPermissions()
+                    }
+                    .buttonStyle(SecondaryPanelButtonStyle())
+                }
+
+                if model.launchAtLoginStatus != .enabled {
+                    Button("Login Items") {
+                        model.openLoginItemsSettings()
+                    }
+                    .buttonStyle(TextPanelButtonStyle())
+                }
+            }
+        }
+        .panelCard()
     }
 
     private var headerCard: some View {
@@ -180,26 +250,37 @@ struct TimerPanelView: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
+        }
+        .panelCard()
+    }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Top bar")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.56))
+    private var topBarCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel("Top bar")
 
-                LazyVGrid(columns: topBarModeColumns, spacing: 8) {
-                    ForEach(AppModel.MenuBarDisplayMode.allCases, id: \.self) { mode in
-                        Button {
-                            model.menuBarDisplayMode = mode
-                        } label: {
-                            Text(mode.title)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(TopBarModeButtonStyle(isSelected: model.menuBarDisplayMode == mode))
+            LazyVGrid(columns: topBarModeColumns, spacing: 8) {
+                ForEach(AppModel.MenuBarDisplayMode.allCases, id: \.self) { mode in
+                    Button {
+                        model.menuBarDisplayMode = mode
+                    } label: {
+                        Text(mode.title)
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(TopBarModeButtonStyle(isSelected: model.menuBarDisplayMode == mode))
                 }
             }
 
             StatRow(label: "Preview", value: model.topBarText)
+                .padding(.top, 2)
+
+            if model.menuBarDisplayMode == .aiTokensPerSecond {
+                VStack(alignment: .leading, spacing: 6) {
+                    SectionLabel("Last 30 minutes")
+                    AIRateSparkline(values: model.aiRateSeries, trailingLabel: "30m")
+                        .frame(height: 42)
+                }
+                .padding(.top, 2)
+            }
         }
         .panelCard()
     }
@@ -298,7 +379,7 @@ struct TimerPanelView: View {
                     .buttonStyle(TextPanelButtonStyle())
                 }
 
-                Text("After turning WorkTimer on in both panes, quit and reopen it once.")
+                Text("WorkTimer retries automatically. If stats still do not start after a few seconds, reopen the app once.")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.46))
             }
@@ -332,6 +413,34 @@ struct TimerPanelView: View {
                 StatRow(label: "Travel", value: model.mouseDistanceText)
                 StatRow(label: "Move time", value: model.mouseMoveTimeText)
                 StatRow(label: "Travel / min", value: model.mouseDistancePerMinuteText)
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            HStack {
+                Text("Wispr Flow")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.56))
+                Spacer()
+                Text(model.wisprFlowStatusLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(model.wisprFlowAvailable ? .white : .white.opacity(0.6))
+            }
+
+            Text(
+                model.wisprFlowAvailable
+                    ? "Reads today’s dictation totals from the local Wispr Flow history database."
+                    : "Wispr Flow stats show up automatically when a local flow.sqlite database is available."
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.56))
+
+            VStack(spacing: 8) {
+                StatRow(label: "Words today", value: model.wisprWordsTodayText)
+                StatRow(label: "Dictation time", value: model.wisprDictationDurationTodayText)
+                StatRow(label: "Clips today", value: model.wisprClipsTodayText)
             }
         }
         .panelCard()
@@ -694,6 +803,91 @@ private struct TopBarModeButtonStyle: ButtonStyle {
             return isSelected ? Color.white.opacity(0.82) : Color.white.opacity(0.14)
         }
         return isSelected ? .white : Color.white.opacity(0.05)
+    }
+}
+
+private struct AIRateSparkline: View {
+    let values: [Double]
+    let trailingLabel: String
+
+    var body: some View {
+        GeometryReader { geometry in
+            let maxValue = graphScaleMax(for: values)
+            let points = values.enumerated().map { index, value in
+                CGPoint(
+                    x: xPosition(for: index, width: geometry.size.width, count: values.count),
+                    y: yPosition(for: value, height: geometry.size.height, maxValue: maxValue)
+                )
+            }
+
+            ZStack(alignment: .bottomLeading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+
+                Path { path in
+                    guard let first = points.first else { return }
+                    path.move(to: CGPoint(x: first.x, y: geometry.size.height))
+                    path.addLine(to: first)
+                    for point in points.dropFirst() {
+                        path.addLine(to: point)
+                    }
+                    if let last = points.last {
+                        path.addLine(to: CGPoint(x: last.x, y: geometry.size.height))
+                    }
+                    path.closeSubpath()
+                }
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.22), Color.white.opacity(0.02)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
+                Path { path in
+                    guard let first = points.first else { return }
+                    path.move(to: first)
+                    for point in points.dropFirst() {
+                        path.addLine(to: point)
+                    }
+                }
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+
+                HStack {
+                    Text("0")
+                    Spacer()
+                    Text(trailingLabel)
+                }
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.34))
+                .padding(.horizontal, 8)
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    private func xPosition(for index: Int, width: CGFloat, count: Int) -> CGFloat {
+        guard count > 1 else { return width / 2 }
+        return CGFloat(index) / CGFloat(count - 1) * width
+    }
+
+    private func graphScaleMax(for values: [Double]) -> Double {
+        let positiveValues = values.filter { $0 > 0 }
+        guard !positiveValues.isEmpty else { return 0.01 }
+        let sorted = positiveValues.sorted()
+        let percentileIndex = min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.9))
+        let percentileValue = sorted[percentileIndex]
+        return max(percentileValue, positiveValues.max() ?? 0, 0.01) > percentileValue * 2
+            ? max(percentileValue, 0.01)
+            : max(sorted.last ?? percentileValue, 0.01)
+    }
+
+    private func yPosition(for value: Double, height: CGFloat, maxValue: Double) -> CGFloat {
+        let normalized = min(max(value / maxValue, 0), 1)
+        let topPadding: CGFloat = 4
+        let bottomPadding: CGFloat = 8
+        let drawableHeight = max(1, height - topPadding - bottomPadding)
+        return topPadding + (1 - normalized) * drawableHeight
     }
 }
 
