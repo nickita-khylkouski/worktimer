@@ -113,7 +113,7 @@ final class WisprFlowMonitor: @unchecked Sendable {
 
     static func loadSummary(databaseURL: URL, referenceDate: Date) throws -> WisprFlowSummary {
         var database: OpaquePointer?
-        let uri = "file:\(databaseURL.path)?mode=ro"
+        let uri = "file:\(databaseURL.path)?mode=ro&immutable=1"
         guard sqlite3_open_v2(uri, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
             defer { sqlite3_close(database) }
             throw databaseError(database, fallback: "Unable to open Wispr Flow database")
@@ -124,7 +124,7 @@ final class WisprFlowMonitor: @unchecked Sendable {
         SELECT
             COUNT(*) AS clipsToday,
             COALESCE(SUM(COALESCE(numWords, 0)), 0) AS wordsToday,
-            COALESCE(SUM(COALESCE(duration, 0)), 0) AS durationToday
+            COALESCE(SUM(COALESCE(duration, speechDuration, 0)), 0) AS durationToday
         FROM History
         WHERE isArchived = 0
           AND strftime('%Y-%m-%d', timestamp, 'localtime') = ?1

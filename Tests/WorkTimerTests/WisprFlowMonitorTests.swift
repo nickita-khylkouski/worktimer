@@ -30,7 +30,8 @@ struct WisprFlowMonitorTests {
             databaseURL: databaseURL,
             id: "today-2",
             numWords: 80,
-            duration: 24.25,
+            duration: nil,
+            speechDuration: 24.25,
             timestamp: formatter.string(from: startOfToday.addingTimeInterval(7_200)),
             isArchived: false
         )
@@ -94,6 +95,7 @@ struct WisprFlowMonitorTests {
             transcriptEntityId TEXT PRIMARY KEY NOT NULL,
             timestamp DATETIME,
             duration FLOAT,
+            speechDuration FLOAT,
             numWords INTEGER,
             isArchived TINYINT(1) NOT NULL DEFAULT 0
         );
@@ -108,7 +110,8 @@ struct WisprFlowMonitorTests {
         databaseURL: URL,
         id: String,
         numWords: Int,
-        duration: Double,
+        duration: Double?,
+        speechDuration: Double? = nil,
         timestamp: String,
         isArchived: Bool
     ) throws {
@@ -120,8 +123,8 @@ struct WisprFlowMonitorTests {
         defer { sqlite3_close(database) }
 
         let sql = """
-        INSERT INTO History (transcriptEntityId, timestamp, duration, numWords, isArchived)
-        VALUES (?1, ?2, ?3, ?4, ?5);
+        INSERT INTO History (transcriptEntityId, timestamp, duration, speechDuration, numWords, isArchived)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6);
         """
 
         var statement: OpaquePointer?
@@ -136,9 +139,18 @@ struct WisprFlowMonitorTests {
         _ = timestamp.withCString { value in
             sqlite3_bind_text(statement, 2, value, -1, sqliteTransientDestructor)
         }
-        sqlite3_bind_double(statement, 3, duration)
-        sqlite3_bind_int64(statement, 4, Int64(numWords))
-        sqlite3_bind_int(statement, 5, isArchived ? 1 : 0)
+        if let duration {
+            sqlite3_bind_double(statement, 3, duration)
+        } else {
+            sqlite3_bind_null(statement, 3)
+        }
+        if let speechDuration {
+            sqlite3_bind_double(statement, 4, speechDuration)
+        } else {
+            sqlite3_bind_null(statement, 4)
+        }
+        sqlite3_bind_int64(statement, 5, Int64(numWords))
+        sqlite3_bind_int(statement, 6, isArchived ? 1 : 0)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw testError(String(cString: sqlite3_errmsg(database)))

@@ -58,19 +58,15 @@ final class StatusItemController: NSObject {
 
         let width = textWidth(for: displayText, font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium))
         statusItem.length = max(64, width + 14)
-        button.image = nil
-        button.imagePosition = .noImage
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        button.font = font
-        button.title = displayText
-        button.attributedTitle = NSAttributedString(
-            string: displayText,
-            attributes: [
-                .font: font,
-                .foregroundColor: isRunning ? NSColor.labelColor : NSColor.systemRed,
-            ]
-        )
-        button.contentTintColor = isRunning ? nil : .systemRed
+        let textColor = isRunning ? NSColor.labelColor : NSColor.systemRed
+        button.font = nil
+        button.title = ""
+        button.attributedTitle = NSAttributedString(string: "")
+        button.image = renderedTextImage(text: displayText, font: font, color: textColor)
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.contentTintColor = nil
         button.sizeToFit()
         DebugTrace.log("StatusItemController expanded width=\(button.frame.width) statusLength=\(statusItem.length)")
     }
@@ -154,6 +150,31 @@ final class StatusItemController: NSObject {
         return NSAttributedString(string: text, attributes: attributes).size().width
     }
 
+    private func renderedTextImage(text: String, font: NSFont, color: NSColor) -> NSImage? {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attributedString.size()
+        guard textSize.width > 0, textSize.height > 0 else {
+            return nil
+        }
+
+        let imageSize = NSSize(width: ceil(textSize.width), height: ceil(textSize.height))
+        let image = NSImage(size: imageSize)
+        image.lockFocus()
+        attributedString.draw(
+            at: NSPoint(
+                x: 0,
+                y: (imageSize.height - textSize.height) / 2
+            )
+        )
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
     private static func loadTemplateIcon(named name: String) -> NSImage? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
               let image = NSImage(contentsOf: url)
@@ -161,8 +182,67 @@ final class StatusItemController: NSObject {
             return nil
         }
 
-        image.isTemplate = true
-        return image
+        let trimmed = trimTransparentPadding(from: image) ?? image
+        trimmed.isTemplate = true
+        return trimmed
+    }
+
+    private static func trimTransparentPadding(from image: NSImage) -> NSImage? {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let cgImage = bitmap.cgImage,
+              let croppedCGImage = cgImage.cropping(to: nonTransparentBounds(in: cgImage))
+        else {
+            return nil
+        }
+
+        let trimmed = NSImage(cgImage: croppedCGImage, size: NSSize(width: croppedCGImage.width, height: croppedCGImage.height))
+        trimmed.isTemplate = image.isTemplate
+        return trimmed
+    }
+
+    private static func nonTransparentBounds(in image: CGImage) -> CGRect {
+        guard let dataProvider = image.dataProvider,
+              let data = dataProvider.data,
+              let bytes = CFDataGetBytePtr(data)
+        else {
+            return CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        }
+
+        let width = image.width
+        let height = image.height
+        let bytesPerRow = image.bytesPerRow
+        let alphaIndex = 3
+
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = y * bytesPerRow + (x * 4)
+                let alpha = bytes[offset + alphaIndex]
+                guard alpha > 0 else {
+                    continue
+                }
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+
+        guard maxX >= minX, maxY >= minY else {
+            return CGRect(x: 0, y: 0, width: width, height: height)
+        }
+
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX + 1,
+            height: maxY - minY + 1
+        )
     }
 
     private static func loadTintedIcon(named name: String, color: NSColor) -> NSImage? {
@@ -172,10 +252,11 @@ final class StatusItemController: NSObject {
             return nil
         }
 
-        let tintedImage = NSImage(size: sourceImage.size)
+        let baseImage = trimTransparentPadding(from: sourceImage) ?? sourceImage
+        let tintedImage = NSImage(size: baseImage.size)
         tintedImage.lockFocus()
-        let bounds = NSRect(origin: .zero, size: sourceImage.size)
-        sourceImage.draw(in: bounds)
+        let bounds = NSRect(origin: .zero, size: baseImage.size)
+        baseImage.draw(in: bounds)
         color.set()
         bounds.fill(using: .sourceAtop)
         tintedImage.unlockFocus()
