@@ -1,0 +1,72 @@
+<svg width="1280" height="820" viewBox="0 0 1280 820" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="820" fill="#0B0B0C"/>
+  <rect x="0" y="0" width="1280" height="72" fill="#161616"/>
+  <text x="36" y="45" fill="#F4F4F4" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="24" font-weight="700">WorkTimer</text>
+  <g opacity="0.95">
+    <rect x="916" y="16" width="96" height="40" rx="14" fill="#121212" stroke="#2C2C2C"/>
+    <text x="944" y="42" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="20" font-weight="700">7:42:18</text>
+    <rect x="1024" y="16" width="86" height="40" rx="14" fill="#121212" stroke="#2C2C2C"/>
+    <text x="1050" y="42" fill="#FF4D4D" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="20" font-weight="700">$18.42</text>
+    <circle cx="1144" cy="36" r="16" fill="#FFFFFF"/>
+    <path d="M1144 28V36L1149 40" stroke="#0B0B0C" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <rect x="114" y="136" width="606" height="594" rx="30" fill="#111111" stroke="#2B2B2B" stroke-width="2"/>
+  <circle cx="152" cy="174" r="10" fill="#FF5F57"/>
+  <circle cx="184" cy="174" r="10" fill="#FEBB2E"/>
+  <circle cx="216" cy="174" r="10" fill="#28C840"/>
+
+  <text x="154" y="228" fill="#F3F3F3" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="16" font-weight="600">WorkTimer</text>
+  <text x="154" y="294" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="58" font-weight="700">7:42:18</text>
+
+  <rect x="600" y="212" width="86" height="40" rx="14" fill="#171717" stroke="#303030"/>
+  <text x="623" y="238" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="20" font-weight="600">Reset</text>
+
+  <text x="154" y="346" fill="#9A9A9E" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="14" font-weight="600">STATUS</text>
+  <text x="306" y="346" fill="#9A9A9E" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="14" font-weight="600">TODAY</text>
+  <text x="466" y="346" fill="#9A9A9E" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="14" font-weight="600">PAY</text>
+  <text x="154" y="382" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="24" font-weight="700">Running</text>
+  <text x="306" y="382" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="24" font-weight="700">7:42:18</text>
+  <text x="466" y="382" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="24" font-weight="700">$1,191.09</text>
+
+  <rect x="142" y="424" width="550" height="74" rx="18" fill="#171717" stroke="#2F2F2F"/>
+  <text x="164" y="454" fill="#8D8D91" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="15" font-weight="600">Top bar</text>
+  <text x="164" y="483" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="24" font-weight="700">Show in menu bar</text>
+  <text x="541" y="483" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="24" font-weight="700">AI /s</text>
+  <path d="M653 469L665 481L677 469" stroke="#9A9A9E" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="142" y="520" width="550" height="178" rx="18" fill="#171717" stroke="#2F2F2F"/>
+  <text x="164" y="551" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="21" font-weight="700">Daily Log</text>
+  <text x="538" y="551" fill="#9A9A9E" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="16" font-weight="600">Auto resets each day</text>
+
+  <rect x="164" y="572" width="506" height="48" rx="14" fill="#202020" stroke="#343434"/>
+  <text x="188" y="602" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="24" font-weight="700">Today</text>
+  <text x="524" y="602" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="22" font-weight="700">$1,191.09</text>
+
+  <rect x="164" y="634" width="506" height="48" rx="14" fill="#202020" stroke="#343434"/>
+  <text x="188" y="664" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="24" font-weight="700">Yesterday</text>
+  <text x="548" y="664" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="22" font-weight="700">$755.40</text>
+
+  <rect x="770" y="206" width="378" height="430" rx="26" fill="#121212" stroke="#2D2D2D" stroke-width="2"/>
+  <circle cx="804" cy="242" r="9" fill="#FF5F57"/>
+  <circle cx="833" cy="242" r="9" fill="#FEBB2E"/>
+  <circle cx="862" cy="242" r="9" fill="#28C840"/>
+  <text x="804" y="296" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="32" font-weight="700">Yesterday</text>
+  <text x="804" y="326" fill="#9A9A9E" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="15" font-weight="600">Monday, April 7</text>
+
+  <rect x="794" y="356" width="330" height="112" rx="16" fill="#191919" stroke="#313131"/>
+  <text x="816" y="388" fill="#A1A1A5" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="14" font-weight="700">WORK</text>
+  <text x="816" y="424" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="19" font-weight="600">Worked</text>
+  <text x="1038" y="424" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="19" font-weight="700">7:33:14</text>
+  <text x="816" y="454" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="19" font-weight="600">Pay</text>
+  <text x="1048" y="454" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="19" font-weight="700">$755.40</text>
+
+  <rect x="794" y="486" width="330" height="126" rx="16" fill="#191919" stroke="#313131"/>
+  <text x="816" y="518" fill="#A1A1A5" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="14" font-weight="700">INPUT</text>
+  <text x="816" y="554" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="19" font-weight="600">Typing time</text>
+  <text x="1038" y="554" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="19" font-weight="700">2:18:06</text>
+  <text x="816" y="584" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="19" font-weight="600">Characters</text>
+  <text x="1058" y="584" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Mono', monospace" font-size="19" font-weight="700">18.4K</text>
+
+  <text x="1106" y="772" fill="#6B6B70" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="14" font-weight="600">menu bar timer • daily history • local stats</text>
+</svg>

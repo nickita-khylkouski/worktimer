@@ -24,6 +24,10 @@
   <a href="#development">Development</a>
 </p>
 
+<p align="center">
+  <img src="docs/worktimer-preview.svg" alt="WorkTimer preview showing the menu bar timer, control panel, and daily detail window" width="980">
+</p>
+
 ## Overview
 
 WorkTimer launches into the macOS menu bar and starts counting immediately. It is built for people who want a simple timer at the top of the screen, but also want richer local stats without needing a web account or sync service.
