@@ -13,7 +13,17 @@
   <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
   <img src="https://img.shields.io/badge/app-menu%20bar%20%2B%20Dock-white" alt="Menu bar and Dock">
   <img src="https://img.shields.io/badge/storage-local%20SQLite-blue" alt="Local SQLite">
+  <img src="https://img.shields.io/badge/status-signed-success" alt="Developer ID signed">
 </p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#first-launch">First Launch</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#packaging">Packaging</a>
+</p>
+
+> WorkTimer is built for people who want a timer that stays out of the way but still exposes useful local stats.
 
 ## Overview
 
@@ -49,6 +59,15 @@ Local state is stored in:
 
 `~/Library/Application Support/WorkTimer/worktimer.sqlite`
 
+### Highlights
+
+- menu bar first, full app second
+- live pay that updates smoothly instead of jumping in big chunks
+- inline timer editing for correcting today’s work time
+- hoverable `AI /s` graph with exact sample values
+- local-only storage for the core timer/history state
+- real macOS app bundle with Dock icon, menu bar item, and login-item support
+
 ## Install
 
 ### Downloaded app
@@ -73,6 +92,13 @@ That installs to:
 
 ## First Launch
 
+### What new users will see
+
+1. WorkTimer opens and appears in the menu bar
+2. The setup panel walks through the missing steps
+3. Timer and pay start working immediately
+4. Typing and mouse stats unlock after privacy approval
+
 Timer and pay tracking work immediately.
 
 Typing and mouse stats need macOS privacy approval:
@@ -94,6 +120,12 @@ Useful scripts:
 ./scripts/open-app.sh
 ./scripts/doctor.sh
 ```
+
+### Privacy notes
+
+- Accessibility and Input Monitoring are required for typing and mouse capture
+- moving the app into `Applications` before granting access makes permission persistence much more reliable
+- if permissions look granted but stats are stale, reopening the app once usually fixes the macOS privacy state
 
 ## Controls
 
@@ -147,6 +179,12 @@ If you have Developer ID + notarization configured:
 ```bash
 ./scripts/package-app.sh --notarize --profile=Personal
 ```
+
+### Repo hygiene
+
+- `.gitignore` is intentionally committed
+- `.build/`, `dist/`, and `.swiftpm/` are intentionally ignored
+- app resources such as icons and bundle metadata are intentionally tracked
 
 ## Notes
 
