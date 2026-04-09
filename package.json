@@ -1,10 +1,10 @@
 {
   "name": "worktimer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "CLI installer for the WorkTimer macOS menu bar app",
   "type": "module",
   "bin": {
-    "worktimer": "./bin/worktimer.mjs"
+    "worktimer": "bin/worktimer.mjs"
   },
   "files": [
     "bin",
