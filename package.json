@@ -1,5 +1,5 @@
 {
-  "name": "worktimer",
+  "name": "@nickitakhy/worktimer",
   "version": "0.2.1",
   "description": "CLI installer for the WorkTimer macOS menu bar app",
   "type": "module",

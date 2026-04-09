@@ -35,7 +35,7 @@ If the menu bar item is missing, check the hidden section in Ice/Bartender first
 If you already have Node installed on macOS, the fastest install is:
 
 ```bash
-npx worktimer
+npx @nickitakhy/worktimer
 ```
 
 That downloads the matching signed `WorkTimer.app` from GitHub releases, installs it into `~/Applications`, and opens it.
@@ -43,9 +43,9 @@ That downloads the matching signed `WorkTimer.app` from GitHub releases, install
 Useful commands:
 
 ```bash
-npx worktimer open
-npx worktimer doctor
-npx worktimer install --app-dir=/Applications
+npx @nickitakhy/worktimer open
+npx @nickitakhy/worktimer doctor
+npx @nickitakhy/worktimer install --app-dir=/Applications
 ```
 
 ## Requirements
