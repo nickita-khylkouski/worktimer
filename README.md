@@ -1,124 +1,111 @@
 # WorkTimer
 
-<p align="center">
-  <img src="AppBundle/Resources/AppIcon.png" alt="WorkTimer icon" width="120" height="120">
-</p>
+Small macOS menu bar timer for tracking work time from the top-right of the screen.
 
-<p align="center">
-  WorkTimer is a native macOS menu bar timer for tracking work time, live pay, typing, mouse movement, and daily history from the top-right of your screen.
-</p>
+## What It Does
 
-<p align="center">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-black">
-  <img alt="Swift" src="https://img.shields.io/badge/Swift-6-black">
-  <img alt="Type" src="https://img.shields.io/badge/app-menu%20bar-black">
-  <img alt="Storage" src="https://img.shields.io/badge/storage-local%20SQLite-black">
-</p>
+- Starts counting up as soon as the app launches.
+- Lives in the macOS menu bar.
+- Also appears in the Dock while running.
+- Tries to register itself to launch at login.
+- Single click pauses or resumes.
+- Double click opens the panel.
+- Right click opens the panel.
+- Resets automatically each day and keeps a daily log.
+- Can show timer, money, typing stats, mouse distance, or an icon in the menu bar.
+- Saves the current day session locally, so relaunching the app does not wipe the timer.
+- Tracks typing time, chars, CPM, WPM, and estimated on-screen mouse travel.
 
-<p align="center">
-  <a href="#overview">Overview</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#permissions">Permissions</a> ·
-  <a href="#share-the-app">Share The App</a> ·
-  <a href="#development">Development</a>
-</p>
+## Quick Start For Someone Downloading The App
 
-<p align="center">
-  <img src="docs/worktimer-preview.svg" alt="WorkTimer preview showing the menu bar timer, control panel, and daily detail window" width="980">
-</p>
+If you are just receiving `WorkTimer.app` or `WorkTimer-macOS.zip`, do this:
 
-## Overview
+1. Unzip it
+2. Drag `WorkTimer.app` into `/Applications` or `~/Applications`
+3. Open it
+4. The setup panel should open automatically on first launch
+5. If you want typing and mouse stats, press the in-app `Grant Access` button and enable WorkTimer in:
+   - `System Settings > Privacy & Security > Accessibility`
+   - `System Settings > Privacy & Security > Input Monitoring`
 
-WorkTimer launches into the macOS menu bar and starts counting immediately. It is built for people who want a simple timer at the top of the screen, but also want richer local stats without needing a web account or sync service.
+If the menu bar item is missing, check the hidden section in Ice/Bartender first.
 
-It can show different live values in the menu bar, including:
+## Requirements
 
-- elapsed work time
-- earnings
-- typing time
-- CPM / WPM / chars
-- mouse travel
-- AI usage
-- disk stats
-- icon-only mode
+- macOS 14 or newer
+- Xcode 16 or current Swift 6 toolchain
 
-The panel gives you quick controls, live stats, daily history, and a detail window for past days.
+## Developer Install
 
-## Features
+```bash
+cd apps/worktimer
+./scripts/install-app.sh
+```
 
-| Area | What it does |
-| --- | --- |
-| Timer | Starts on launch, pauses/resumes with one click, resets daily automatically |
-| Menu bar | Single click toggles, double click opens panel, right click opens panel |
-| Pay | Hourly rate input plus live earnings that move smoothly |
-| Typing | Tracks typing time, characters, CPM, WPM, with short idle gaps handled gracefully |
-| Mouse | Tracks estimated on-screen cursor travel and movement time |
-| Daily log | Saves each day locally and opens a full detail panel when you click a day |
-| Persistence | Restores the current day after relaunch instead of wiping the timer |
-| Local data | Uses local SQLite storage in `~/Library/Application Support/WorkTimer` |
-| Extras | Wispr Flow stats, AI usage stats, disk counters, launch-at-login setup |
+That builds a release app, installs it to `~/Applications/WorkTimer.app`, and opens it.
 
-## Quick Start
+If you want a different install location, set:
 
-If you are just downloading `WorkTimer.app` or `WorkTimer-macOS.zip`:
+```bash
+WORKTIMER_INSTALL_DIR=/Applications ./scripts/install-app.sh
+```
 
-1. Unzip it.
-2. Drag `WorkTimer.app` into `/Applications` or `~/Applications`.
-3. Open it.
-4. The setup panel should appear automatically on first launch.
-5. If the menu bar item is hidden, check Ice or Bartender’s hidden section first.
+The installer will use your personal `Developer ID Application` certificate if one is available in Keychain. Otherwise it falls back to ad hoc signing for local use.
 
-What you should see:
+## Setup For Full Stats
 
-- a menu bar item at the top-right of the screen
-- a setup/control panel on first launch
-- the app in the Dock while it is running
+Timer and pay tracking work right away.
 
-## Permissions
+AI usage is optional and only appears when WorkTimer can find local Codex/Claude logs or compatible usage snapshot files.
 
-Timer and pay tracking work immediately.
+Wispr Flow stats are optional and only appear when Wispr Flow is installed locally.
 
 Typing and mouse stats need macOS privacy approval:
 
 - `System Settings > Privacy & Security > Accessibility`
 - `System Settings > Privacy & Security > Input Monitoring`
-
-Important:
-
 - move `WorkTimer.app` into `/Applications` or `~/Applications` before granting permissions
-- the app retries automatically after permissions are enabled
-- if the stats still look stuck, relaunch the app once
+- WorkTimer retries automatically after both switches are on, but if stats still look stuck, reopen `WorkTimer` once
 
-Helpful commands:
+You can jump straight there with:
 
 ```bash
+cd apps/worktimer
 ./scripts/open-permissions.sh
+```
+
+If permissions get stuck and you want to re-grant them cleanly:
+
+```bash
+cd apps/worktimer
 ./scripts/reset-permissions.sh
-./scripts/open-app.sh
+./scripts/open-permissions.sh
+```
+
+To inspect the installed app’s trust state and path:
+
+```bash
+cd apps/worktimer
 ./scripts/doctor.sh
 ```
 
-## Install From Source
+## Launch Again Later
 
 ```bash
-./scripts/install-app.sh
+cd apps/worktimer
+./scripts/open-app.sh
 ```
 
-That will:
-
-- build a release app
-- install it to `~/Applications/WorkTimer.app`
-- sign it for local use
-- reopen the app
-
-If a personal `Developer ID Application` certificate is available in Keychain, the installer uses it. Otherwise it falls back to ad hoc signing for local use.
-
-## Share The App
-
-To make a sendable zip:
+or:
 
 ```bash
+open -na ~/Applications/WorkTimer.app
+```
+
+## Make A Sendable Build
+
+```bash
+cd apps/worktimer
 ./scripts/package-app.sh
 ```
 
@@ -127,75 +114,54 @@ That creates:
 - `dist/WorkTimer-macOS.zip`
 - `dist/README-SEND-TO-FRIENDS.txt`
 
-For a notarized zip:
+That is the preferred non-developer onboarding path for another person.
+
+To build a notarized zip with your personal ASC auth profile:
 
 ```bash
+cd apps/worktimer
 ./scripts/package-app.sh --notarize --profile=Personal
 ```
 
 ## First-Run Behavior
 
-On a normal first run:
-
-- the app appears in the menu bar
-- the setup panel opens automatically
-- launch-at-login is requested
-- the timer starts immediately
-
-Controls:
-
-- single click: pause or resume
-- double click: open panel
-- right click: open panel
-
-## Local Storage
-
-WorkTimer stores its data locally:
-
-- main DB: `~/Library/Application Support/WorkTimer/worktimer.sqlite`
-- app bundle install target: `~/Applications/WorkTimer.app`
-
-Notes:
-
-- current-day state survives relaunches
-- daily history is saved locally
-- older typing DB installs are migrated automatically
-- mouse distance is an estimate of cursor travel on the display surface
-- Wispr Flow stats are read from the local Wispr database when available
+- The app should appear in the top-right menu bar area.
+- The app should also appear in the Dock while it is running.
+- On first launch, the setup panel should open automatically.
+- The app also attempts to turn on launch-at-login automatically.
+- If macOS asks for approval, check `System Settings > General > Login Items`.
+- If you want typing stats or mouse travel, approve `WorkTimer` in both `Accessibility` and `Input Monitoring`.
+- If you use Ice, Bartender, or another menu bar organizer, it may appear in the hidden section first.
+- The default panel is simple black/white, with:
+  - current timer
+  - small reset button
+  - hourly pay input
+  - top-bar mode switch
+  - typing stats
+  - mouse travel stats
+  - daily history
+  - action log
 
 ## Development
 
-Run directly:
+Run directly from SwiftPM:
 
 ```bash
+cd apps/worktimer
 swift run WorkTimer
 ```
 
-Build:
+Run tests:
 
 ```bash
-swift build
-```
-
-Test:
-
-```bash
+cd apps/worktimer
 swift test
 ```
 
-## Repository Layout
+## Notes
 
-| Path | Purpose |
-| --- | --- |
-| `Sources/WorkTimer` | App code |
-| `Tests/WorkTimerTests` | Unit and behavior tests |
-| `scripts/install-app.sh` | Build + install locally |
-| `scripts/package-app.sh` | Build a sendable zip |
-| `scripts/open-app.sh` | Reopen the installed app |
-| `scripts/open-permissions.sh` | Jump to relevant macOS privacy panes |
-| `scripts/doctor.sh` | Inspect install path, trust, and setup state |
-
-## Requirements
-
-- macOS 14 or newer
-- Xcode 16 or a current Swift 6 toolchain
+- WorkTimer data now lives in `~/Library/Application Support/WorkTimer/worktimer.sqlite`.
+- Older `typing.sqlite` installs are migrated automatically the first time the new build launches.
+- Updating or reinstalling the app should preserve the current day timer and history.
+- Mouse distance is an estimate of cursor travel on the display surface, based on display size reported by macOS.
+- Wispr Flow stats are detected automatically from the local `flow.sqlite` database when Wispr Flow is installed.

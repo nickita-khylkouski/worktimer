@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APP_CANDIDATES=(
+  "${WORKTIMER_INSTALL_DIR:-$HOME/Applications}/WorkTimer.app"
   "$HOME/Applications/WorkTimer.app"
   "/Applications/WorkTimer.app"
 )

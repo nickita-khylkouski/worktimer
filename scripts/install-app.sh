@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="WorkTimer"
 BUILD_CONFIGURATION="release"
 OPEN_AFTER_INSTALL=1
+APP_PARENT_DIR="${WORKTIMER_INSTALL_DIR:-$HOME/Applications}"
 
 resolve_signing_identity() {
   if [[ -n "${WORKTIMER_SIGN_IDENTITY:-}" ]]; then
@@ -46,14 +47,19 @@ if ! command -v swift >/dev/null 2>&1; then
   exit 1
 fi
 
-ROOT_BUILD_DIR="$ROOT_DIR/.build/arm64-apple-macosx/${BUILD_CONFIGURATION}"
-APP_DIR="$HOME/Applications/${APP_NAME}.app"
-EXECUTABLE_PATH="$ROOT_BUILD_DIR/${APP_NAME}"
+APP_DIR="$APP_PARENT_DIR/${APP_NAME}.app"
 
 cd "$ROOT_DIR"
 swift build -c "$BUILD_CONFIGURATION" --product "$APP_NAME"
+BIN_DIR="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)"
+EXECUTABLE_PATH="$BIN_DIR/${APP_NAME}"
 
-mkdir -p "$HOME/Applications"
+if [[ ! -x "$EXECUTABLE_PATH" ]]; then
+  echo "Built executable was not found at $EXECUTABLE_PATH" >&2
+  exit 1
+fi
+
+mkdir -p "$APP_PARENT_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 

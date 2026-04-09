@@ -70,16 +70,17 @@ final class AIUsageTracker {
 
     private let fileManager = FileManager.default
     private let now: () -> Date
+    private let snapshotRootCandidates: [URL]
 
-    private let codexUsageURL: URL?
-    private let claudeUsageURL: URL?
+    private var codexUsageURL: URL?
+    private var claudeUsageURL: URL?
 
-    private let codexSnapshot: AIUsageSnapshotTotals
-    private let claudeSnapshot: AIUsageSnapshotTotals
-    private let codexCutoffDate: Date
-    private let claudeCutoffDate: Date
-    private let codexTodaySnapshotTokens: Int64
-    private let claudeTodaySnapshotTokens: Int64
+    private var codexSnapshot: AIUsageSnapshotTotals
+    private var claudeSnapshot: AIUsageSnapshotTotals
+    private var codexCutoffDate: Date
+    private var claudeCutoffDate: Date
+    private var codexTodaySnapshotTokens: Int64
+    private var claudeTodaySnapshotTokens: Int64
 
     private var codexLiveTokens: Int64 = 0
     private var claudeLiveTokens: Int64 = 0
@@ -106,43 +107,34 @@ final class AIUsageTracker {
     }()
 
     init(siteRoot: URL? = nil, codexRoot: URL? = nil, claudeRoot: URL? = nil, supersetSessionLogRoot: URL? = nil, now: @escaping () -> Date = Date.init) throws {
+        let candidateSnapshotRoots = Self.snapshotRootCandidates(explicitSiteRoot: siteRoot)
         let resolvedSiteRoot = siteRoot ?? Self.defaultSiteRoot()
         self.siteRoot = resolvedSiteRoot
         self.codexRoot = codexRoot ?? Self.defaultCodexRoot()
         self.claudeRoot = claudeRoot ?? Self.defaultClaudeRoot()
         self.supersetSessionLogRoot = supersetSessionLogRoot ?? Self.defaultSupersetSessionLogRoot()
         self.now = now
+        self.snapshotRootCandidates = candidateSnapshotRoots
 
-        codexUsageURL = resolvedSiteRoot.flatMap { Self.resolveSnapshotURL(in: $0, fileName: "codex-usage.json") }
-        claudeUsageURL = resolvedSiteRoot.flatMap { Self.resolveSnapshotURL(in: $0, fileName: "claude-usage.json") }
-
-        if let codexUsageURL {
-            codexSnapshot = try Self.loadSnapshot(from: codexUsageURL, tokenKey: "totalTokens", costKey: "costUSD")
-            codexCutoffDate = try Self.modificationDate(for: codexUsageURL)
-            codexTodaySnapshotTokens = try Self.loadTodayTokens(from: codexUsageURL, now: now)
-        } else {
-            codexSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
-            codexCutoffDate = .distantPast
-            codexTodaySnapshotTokens = 0
-        }
-
-        if let claudeUsageURL {
-            claudeSnapshot = try Self.loadSnapshot(from: claudeUsageURL, tokenKey: "totalTokens", costKey: "totalCost")
-            claudeCutoffDate = try Self.modificationDate(for: claudeUsageURL)
-            claudeTodaySnapshotTokens = try Self.loadTodayTokens(from: claudeUsageURL, now: now)
-        } else {
-            claudeSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
-            claudeCutoffDate = .distantPast
-            claudeTodaySnapshotTokens = 0
-        }
+        codexUsageURL = nil
+        claudeUsageURL = nil
+        codexSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
+        claudeSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
+        codexCutoffDate = .distantPast
+        claudeCutoffDate = .distantPast
+        codexTodaySnapshotTokens = 0
+        claudeTodaySnapshotTokens = 0
+        try refreshSnapshots(force: true)
     }
 
     func bootstrap() throws {
-        try discoverCodex(force: true)
-        try discoverClaude(force: true)
+        try refreshSnapshots(force: false)
+        try discoverCodex(force: true, fullHistory: codexUsageURL == nil)
+        try discoverClaude(force: true, fullHistory: claudeUsageURL == nil)
     }
 
     func tick() throws {
+        try refreshSnapshots(force: false)
         try discoverCodex(force: false)
         try discoverClaude(force: false)
         try poll(files: codexFiles, processor: processCodexChunk(_:chunk:))
@@ -170,10 +162,18 @@ final class AIUsageTracker {
     }
 
     static func defaultSiteRoot() -> URL? {
+        preferredSiteRoot(from: snapshotRootCandidates(explicitSiteRoot: nil))
+    }
+
+    static func snapshotRootCandidates(explicitSiteRoot: URL?) -> [URL] {
+        if let explicitSiteRoot {
+            return [explicitSiteRoot]
+        }
+
         if let override = ProcessInfo.processInfo.environment["WORKTIMER_AI_USAGE_SITE_ROOT"], !override.isEmpty {
             let url = URL(fileURLWithPath: override, isDirectory: true)
             if resolveSnapshotURL(in: url, fileName: "codex-usage.json") != nil {
-                return url
+                return [url]
             }
         }
 
@@ -181,20 +181,28 @@ final class AIUsageTracker {
         var candidates: [URL] = []
 
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
-        candidates.append(currentDirectory)
-        candidates.append(currentDirectory.deletingLastPathComponent())
-        candidates.append(fileManager.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true))
-        candidates.append(fileManager.homeDirectoryForCurrentUser.appendingPathComponent("code/nickita-khylkouski.github.io", isDirectory: true))
+        candidates.append(contentsOf: ancestorCandidates(for: currentDirectory, maxDepth: 6))
 
-        if let codeRoots = try? fileManager.contentsOfDirectory(
-            at: fileManager.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true),
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            candidates.append(contentsOf: codeRoots)
+        let home = fileManager.homeDirectoryForCurrentUser
+        let searchBases = [
+            home.appendingPathComponent("code", isDirectory: true),
+            home.appendingPathComponent("Code", isDirectory: true),
+            home.appendingPathComponent("Developer", isDirectory: true),
+            home.appendingPathComponent("Documents", isDirectory: true),
+        ]
+        candidates.append(contentsOf: searchBases)
+
+        for base in searchBases where fileManager.fileExists(atPath: base.path) {
+            if let roots = try? fileManager.contentsOfDirectory(
+                at: base,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                candidates.append(contentsOf: roots)
+            }
         }
 
-        return candidates.first { resolveSnapshotURL(in: $0, fileName: "codex-usage.json") != nil }
+        return uniqueURLs(candidates)
     }
 
     static func defaultCodexRoot() -> URL {
@@ -262,16 +270,16 @@ final class AIUsageTracker {
             .appendingPathComponent(".superset/session-logs", isDirectory: true)
     }
 
-    private func discoverCodex(force: Bool) throws {
+    private func discoverCodex(force: Bool, fullHistory: Bool = false) throws {
         if !force, now().timeIntervalSince(lastCodexDiscovery) < codexDiscoveryInterval {
             return
         }
         lastCodexDiscovery = now()
 
-        let candidates = try enumerateRecentJSONLFiles(
+        let candidates = try enumerateJSONLFiles(
             root: codexRoot,
-            cutoff: now().addingTimeInterval(-codexDiscoveryLookback),
-            limit: force ? codexBootstrapFileLimit : codexIncrementalFileLimit
+            cutoff: fullHistory ? .distantPast : now().addingTimeInterval(-codexDiscoveryLookback),
+            limit: fullHistory ? nil : (force ? codexBootstrapFileLimit : codexIncrementalFileLimit)
         )
         for candidate in candidates where codexFiles[candidate.url] == nil {
             let tracked = AITrackedFile(url: candidate.url)
@@ -280,16 +288,16 @@ final class AIUsageTracker {
         }
     }
 
-    private func discoverClaude(force: Bool) throws {
+    private func discoverClaude(force: Bool, fullHistory: Bool = false) throws {
         if !force, now().timeIntervalSince(lastClaudeDiscovery) < claudeDiscoveryInterval {
             return
         }
         lastClaudeDiscovery = now()
 
-        let candidates = try enumerateRecentJSONLFiles(
+        let candidates = try enumerateJSONLFiles(
             root: claudeRoot,
-            cutoff: now().addingTimeInterval(-claudeDiscoveryLookback),
-            limit: 64
+            cutoff: fullHistory ? .distantPast : now().addingTimeInterval(-claudeDiscoveryLookback),
+            limit: fullHistory ? nil : 64
         )
         for candidate in candidates where claudeFiles[candidate.url] == nil {
             let tracked = AITrackedFile(url: candidate.url)
@@ -298,7 +306,7 @@ final class AIUsageTracker {
         }
     }
 
-    private func enumerateRecentJSONLFiles(root: URL, cutoff: Date, limit: Int) throws -> [(url: URL, mtime: Date)] {
+    private func enumerateJSONLFiles(root: URL, cutoff: Date, limit: Int?) throws -> [(url: URL, mtime: Date)] {
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
@@ -316,14 +324,31 @@ final class AIUsageTracker {
             }
             results.append((url, mtime))
         }
-        return results.sorted { $0.1 > $1.1 }.prefix(limit).map { $0 }
+        let sorted = results.sorted { $0.1 > $1.1 }
+        guard let limit else {
+            return sorted
+        }
+        return Array(sorted.prefix(limit))
     }
 
     private func scanWholeFile(tracked: AITrackedFile, processor: (AITrackedFile, String) throws -> Void) throws {
-        let data = try Data(contentsOf: tracked.url)
-        let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
-        try processor(tracked, text.hasSuffix("\n") ? text : text + "\n")
-        tracked.offset = UInt64(data.count)
+        let handle = try FileHandle(forReadingFrom: tracked.url)
+        defer { try? handle.close() }
+
+        var totalBytes: UInt64 = 0
+        while true {
+            let data = try handle.read(upToCount: 64 * 1024) ?? Data()
+            guard !data.isEmpty else {
+                break
+            }
+            totalBytes += UInt64(data.count)
+            try processor(tracked, String(decoding: data, as: UTF8.self))
+        }
+
+        if !tracked.buffer.isEmpty {
+            try processor(tracked, "\n")
+        }
+        tracked.offset = totalBytes
     }
 
     private func poll(files: [URL: AITrackedFile], processor: (AITrackedFile, String) throws -> Void) throws {
@@ -523,12 +548,134 @@ final class AIUsageTracker {
     }
 
     private static func resolveSnapshotURL(in root: URL, fileName: String) -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        let directOverride: String?
+        switch fileName {
+        case "codex-usage.json":
+            directOverride = environment["WORKTIMER_CODEX_USAGE_JSON"]
+        case "claude-usage.json":
+            directOverride = environment["WORKTIMER_CLAUDE_USAGE_JSON"]
+        default:
+            directOverride = nil
+        }
+
+        if let directOverride, !directOverride.isEmpty {
+            let directURL = URL(fileURLWithPath: directOverride, isDirectory: false)
+            if FileManager.default.fileExists(atPath: directURL.path) {
+                return directURL
+            }
+        }
+
         let candidates = [
             root.appendingPathComponent("usage-data/\(fileName)", isDirectory: false),
             root.appendingPathComponent("web/src/data/\(fileName)", isDirectory: false),
             root.appendingPathComponent("src/data/\(fileName)", isDirectory: false),
         ]
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    static func preferredSnapshotURL(fileName: String, candidates: [URL]) -> URL? {
+        let snapshotRoots = candidates.compactMap { root -> (URL, Date)? in
+            guard let url = resolveSnapshotURL(in: root, fileName: fileName),
+                  let modifiedAt = try? modificationDate(for: url)
+            else {
+                return nil
+            }
+            return (url, modifiedAt)
+        }
+
+        return snapshotRoots.max { left, right in
+            if left.1 == right.1 {
+                return left.0.path < right.0.path
+            }
+            return left.1 < right.1
+        }?.0
+    }
+
+    private func refreshSnapshots(force: Bool) throws {
+        let latestCodexURL = Self.preferredSnapshotURL(fileName: "codex-usage.json", candidates: snapshotRootCandidates)
+        let latestClaudeURL = Self.preferredSnapshotURL(fileName: "claude-usage.json", candidates: snapshotRootCandidates)
+
+        if force || latestCodexURL != codexUsageURL {
+            try reloadCodexSnapshot(from: latestCodexURL)
+        } else if let latestCodexURL {
+            let latestDate = try Self.modificationDate(for: latestCodexURL)
+            if latestDate > codexCutoffDate {
+                try reloadCodexSnapshot(from: latestCodexURL)
+            }
+        }
+
+        if force || latestClaudeURL != claudeUsageURL {
+            try reloadClaudeSnapshot(from: latestClaudeURL)
+        } else if let latestClaudeURL {
+            let latestDate = try Self.modificationDate(for: latestClaudeURL)
+            if latestDate > claudeCutoffDate {
+                try reloadClaudeSnapshot(from: latestClaudeURL)
+            }
+        }
+    }
+
+    private func reloadCodexSnapshot(from url: URL?) throws {
+        codexUsageURL = url
+        guard let url else {
+            codexSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
+            codexCutoffDate = .distantPast
+            codexTodaySnapshotTokens = 0
+            return
+        }
+
+        codexSnapshot = try Self.loadSnapshot(from: url, tokenKey: "totalTokens", costKey: "costUSD")
+        codexCutoffDate = try Self.modificationDate(for: url)
+        codexTodaySnapshotTokens = try Self.loadTodayTokens(from: url, now: now)
+    }
+
+    private func reloadClaudeSnapshot(from url: URL?) throws {
+        claudeUsageURL = url
+        guard let url else {
+            claudeSnapshot = AIUsageSnapshotTotals(totalTokens: 0, totalCost: 0)
+            claudeCutoffDate = .distantPast
+            claudeTodaySnapshotTokens = 0
+            return
+        }
+
+        claudeSnapshot = try Self.loadSnapshot(from: url, tokenKey: "totalTokens", costKey: "totalCost")
+        claudeCutoffDate = try Self.modificationDate(for: url)
+        claudeTodaySnapshotTokens = try Self.loadTodayTokens(from: url, now: now)
+    }
+
+    static func preferredSiteRoot(from candidates: [URL]) -> URL? {
+        let fileManager = FileManager.default
+        var bestRoot: URL?
+        var bestDate = Date.distantPast
+        var bestSnapshotCount = -1
+
+        for candidate in candidates {
+            guard fileManager.fileExists(atPath: candidate.path) else {
+                continue
+            }
+
+            let codexURL = resolveSnapshotURL(in: candidate, fileName: "codex-usage.json")
+            let claudeURL = resolveSnapshotURL(in: candidate, fileName: "claude-usage.json")
+            let snapshotURLs = [codexURL, claudeURL].compactMap { $0 }
+            guard !snapshotURLs.isEmpty else {
+                continue
+            }
+
+            let latestSnapshotDate = snapshotURLs
+                .compactMap { try? modificationDate(for: $0) }
+                .max() ?? .distantPast
+            let snapshotCount = snapshotURLs.count
+
+            if latestSnapshotDate > bestDate ||
+                (latestSnapshotDate == bestDate && snapshotCount > bestSnapshotCount)
+            {
+                bestRoot = candidate
+                bestDate = latestSnapshotDate
+                bestSnapshotCount = snapshotCount
+            }
+        }
+
+        return bestRoot
     }
 
     private static func freshestExistingRoot(from candidates: [URL]) -> URL? {
@@ -548,6 +695,32 @@ final class AIUsageTracker {
         }
 
         return bestRoot
+    }
+
+    private static func ancestorCandidates(for start: URL, maxDepth: Int) -> [URL] {
+        var results: [URL] = []
+        var current = start
+        for _ in 0...maxDepth {
+            results.append(current)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+        return results
+    }
+
+    private static func uniqueURLs(_ urls: [URL]) -> [URL] {
+        var seen: Set<String> = []
+        var results: [URL] = []
+        for url in urls {
+            let standardized = url.standardizedFileURL
+            if seen.insert(standardized.path).inserted {
+                results.append(standardized)
+            }
+        }
+        return results
     }
 
     private static func latestJSONLModificationDate(in root: URL) -> Date? {

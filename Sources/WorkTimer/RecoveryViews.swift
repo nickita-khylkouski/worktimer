@@ -12,6 +12,7 @@ struct TimerPanelView: View {
     @State private var diskExpanded = false
     @State private var historyExpanded = true
     @State private var logExpanded = false
+    @State private var topBarPickerExpanded = false
     @FocusState private var hourlyRateFieldFocused: Bool
     @FocusState private var workedTimeFieldFocused: Bool
 
@@ -75,27 +76,32 @@ struct TimerPanelView: View {
             HStack {
                 SectionLabel("Setup")
                 Spacer()
-                Text(model.onboardingStatusLabel)
+                Text(model.onboardingProgressText)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(theme.secondary)
-                Button("Hide") {
+                Button("Later") {
                     model.dismissOnboarding()
                 }
                 .buttonStyle(TextPanelButtonStyle(theme: theme))
             }
 
-            Text("New users should follow this once: move the app into Applications, grant access from here, then confirm login-item approval if macOS asks.")
-                .font(.caption)
-                .foregroundStyle(theme.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.onboardingHeadline)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(theme.primary)
+
+                Text(model.onboardingDescription)
+                    .font(.caption)
+                    .foregroundStyle(theme.secondary)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(model.onboardingChecklist.enumerated()), id: \.offset) { _, item in
+                ForEach(Array(model.onboardingChecklist.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 8) {
-                        Text(item.complete ? "Done" : "Next")
+                        Text(item.complete ? "Done" : "\(index + 1)")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(item.complete ? theme.inversePrimary : theme.primary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .frame(width: 28, height: 22)
                             .background(item.complete ? theme.accent : theme.mutedFill)
                             .clipShape(Capsule())
 
@@ -111,25 +117,16 @@ struct TimerPanelView: View {
             }
 
             HStack(spacing: 8) {
-                if !model.isInstalledInApplications {
-                    Button("Applications") {
-                        model.openApplicationsFolder()
+                Button(model.onboardingPrimaryActionTitle) {
+                    model.performPrimaryOnboardingAction()
+                }
+                .buttonStyle(PrimaryPanelButtonStyle(theme: theme))
+
+                if let secondaryTitle = model.onboardingSecondaryActionTitle {
+                    Button(secondaryTitle) {
+                        model.performSecondaryOnboardingAction()
                     }
                     .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
-                }
-
-                if model.needsTypingPermissions {
-                    Button("Grant Access") {
-                        model.requestTypingPermissions()
-                    }
-                    .buttonStyle(SecondaryPanelButtonStyle(theme: theme))
-                }
-
-                if model.launchAtLoginStatus != .enabled {
-                    Button("Login Items") {
-                        model.openLoginItemsSettings()
-                    }
-                    .buttonStyle(TextPanelButtonStyle(theme: theme))
                 }
             }
         }
@@ -277,49 +274,85 @@ struct TimerPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel("Top bar")
 
-            Menu {
-                ForEach(AppModel.MenuBarDisplayMode.allCases, id: \.self) { mode in
-                    Button {
-                        model.menuBarDisplayMode = mode
-                    } label: {
-                        HStack {
-                            Text(mode.title)
-                            if model.menuBarDisplayMode == mode {
-                                Spacer()
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    topBarPickerExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text("Show in menu bar")
                             .font(.caption.weight(.bold))
                             .foregroundStyle(theme.secondary)
                         Text(model.menuBarDisplayMode.title)
-                            .font(.system(size: 17, weight: .bold, design: .default))
+                            .font(.system(size: 20, weight: .bold, design: .default))
                             .foregroundStyle(theme.primary)
+                        Text(topBarModePreview(model.menuBarDisplayMode))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(theme.secondary)
                     }
 
                     Spacer(minLength: 8)
 
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(theme.secondary)
+                    Image(systemName: topBarPickerExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(theme.primary)
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.vertical, 14)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(theme.cardFill)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(theme.stroke, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(topBarPickerExpanded ? theme.primary.opacity(0.35) : theme.stroke, lineWidth: 1)
                 )
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+
+            if topBarPickerExpanded {
+                VStack(spacing: 6) {
+                    ForEach(AppModel.MenuBarDisplayMode.allCases, id: \.self) { mode in
+                        Button {
+                            model.menuBarDisplayMode = mode
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                topBarPickerExpanded = false
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mode.title)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(theme.primary)
+                                    Text(topBarModePreview(mode))
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(theme.secondary)
+                                }
+
+                                Spacer(minLength: 8)
+
+                                if model.menuBarDisplayMode == mode {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(theme.primary)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(model.menuBarDisplayMode == mode ? theme.mutedFill : theme.windowBackground)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(model.menuBarDisplayMode == mode ? theme.primary.opacity(0.28) : theme.stroke, lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
 
             Divider()
 
@@ -693,6 +726,39 @@ struct TimerPanelView: View {
             return .dark
         case .dark:
             return .system
+        }
+    }
+
+    private func topBarModePreview(_ mode: AppModel.MenuBarDisplayMode) -> String {
+        switch mode {
+        case .elapsed:
+            return model.elapsedText
+        case .earnings:
+            return model.currentEarningsText
+        case .typingTime:
+            return model.typingTimeText
+        case .charactersPerMinute:
+            return "\(model.typingCharactersPerMinuteText) CPM"
+        case .wordsPerMinute:
+            return "\(model.typingWordsPerMinuteText) WPM"
+        case .characters:
+            return model.typingCharacterCountText
+        case .mouseDistance:
+            return model.mouseDistanceText
+        case .aiTotalTokens:
+            return model.aiCombinedTokensText
+        case .aiTokensPerSecond:
+            return model.aiTokensPerSecondText
+        case .aiTokensToday:
+            return model.aiTodayTokensText
+        case .diskRead:
+            return model.diskReadText
+        case .diskWritten:
+            return model.diskWrittenText
+        case .diskWear:
+            return model.diskWearText
+        case .iconOnly:
+            return "icon"
         }
     }
 

@@ -13,7 +13,110 @@ private func isoDate(_ value: String) -> Date {
     return formatter.date(from: value)!
 }
 
+@Suite(.serialized)
 struct AIUsageTrackerTests {
+    @Test
+    func snapshotRootCandidatesIncludeAncestorRepos() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let repoRoot = root.appendingPathComponent("workspace/nested/repo", isDirectory: true)
+        let previousDirectory = FileManager.default.currentDirectoryPath
+        try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+        let snapshotURL = root.appendingPathComponent("workspace/usage-data/codex-usage.json")
+        try writeAIUsageFixture(snapshotURL, #"{"totals":{"totalTokens":10,"costUSD":0}}"#)
+
+        FileManager.default.changeCurrentDirectoryPath(repoRoot.path)
+        defer { FileManager.default.changeCurrentDirectoryPath(previousDirectory) }
+
+        let candidates = AIUsageTracker.snapshotRootCandidates(explicitSiteRoot: nil)
+
+        #expect(candidates.contains(root.appendingPathComponent("workspace", isDirectory: true).standardizedFileURL))
+    }
+
+    @Test
+    func defaultSiteRootPrefersFreshestSnapshotRoot() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let staleRoot = root.appendingPathComponent("stale-root", isDirectory: true)
+        let freshRoot = root.appendingPathComponent("fresh-root", isDirectory: true)
+
+        let staleCodex = staleRoot.appendingPathComponent("web/src/data/codex-usage.json")
+        let staleClaude = staleRoot.appendingPathComponent("web/src/data/claude-usage.json")
+        let freshCodex = freshRoot.appendingPathComponent("usage-data/codex-usage.json")
+        let freshClaude = freshRoot.appendingPathComponent("usage-data/claude-usage.json")
+
+        try writeAIUsageFixture(staleCodex, #"{"totals":{"totalTokens":10,"costUSD":0}}"#)
+        try writeAIUsageFixture(staleClaude, #"{"totals":{"totalTokens":20,"totalCost":0}}"#)
+        try writeAIUsageFixture(freshCodex, #"{"totals":{"totalTokens":30,"costUSD":0}}"#)
+        try writeAIUsageFixture(freshClaude, #"{"totals":{"totalTokens":40,"totalCost":0}}"#)
+
+        let staleTime = isoDate("2026-04-05T20:18:15Z")
+        let freshTime = isoDate("2026-04-08T13:15:38Z")
+        try FileManager.default.setAttributes([.modificationDate: staleTime], ofItemAtPath: staleCodex.path)
+        try FileManager.default.setAttributes([.modificationDate: staleTime], ofItemAtPath: staleClaude.path)
+        try FileManager.default.setAttributes([.modificationDate: freshTime], ofItemAtPath: freshCodex.path)
+        try FileManager.default.setAttributes([.modificationDate: freshTime], ofItemAtPath: freshClaude.path)
+
+        let resolved = AIUsageTracker.preferredSiteRoot(from: [staleRoot, freshRoot])
+
+        #expect(resolved == freshRoot)
+    }
+
+    @Test
+    func preferredSnapshotURLResolvesEachProviderIndependently() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex-root", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude-root", isDirectory: true)
+
+        let codexURL = codexRoot.appendingPathComponent("usage-data/codex-usage.json")
+        let claudeURL = claudeRoot.appendingPathComponent("usage-data/claude-usage.json")
+        try writeAIUsageFixture(codexURL, #"{"totals":{"totalTokens":30,"costUSD":0}}"#)
+        try writeAIUsageFixture(claudeURL, #"{"totals":{"totalTokens":40,"totalCost":0}}"#)
+
+        let codexTime = isoDate("2026-04-08T13:15:37Z")
+        let claudeTime = isoDate("2026-04-08T13:15:38Z")
+        try FileManager.default.setAttributes([.modificationDate: codexTime], ofItemAtPath: codexURL.path)
+        try FileManager.default.setAttributes([.modificationDate: claudeTime], ofItemAtPath: claudeURL.path)
+
+        let candidates = [codexRoot, claudeRoot]
+        #expect(AIUsageTracker.preferredSnapshotURL(fileName: "codex-usage.json", candidates: candidates) == codexURL)
+        #expect(AIUsageTracker.preferredSnapshotURL(fileName: "claude-usage.json", candidates: candidates) == claudeURL)
+    }
+
+    @Test
+    func tickReloadsSnapshotTotalsAfterJsonChanges() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let siteRoot = root.appendingPathComponent("site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+
+        let codexUsage = siteRoot.appendingPathComponent("usage-data/codex-usage.json")
+        let claudeUsage = siteRoot.appendingPathComponent("usage-data/claude-usage.json")
+        try writeAIUsageFixture(codexUsage, #"{"daily":[{"date":"Apr 08, 2026","totalTokens":100}],"totals":{"totalTokens":100,"costUSD":1.0}}"#)
+        try writeAIUsageFixture(claudeUsage, #"{"daily":[{"date":"2026-04-08","totalTokens":50}],"totals":{"totalTokens":50,"totalCost":2.0}}"#)
+
+        var currentTime = isoDate("2026-04-08T18:00:00Z")
+        try FileManager.default.setAttributes([.modificationDate: currentTime], ofItemAtPath: codexUsage.path)
+        try FileManager.default.setAttributes([.modificationDate: currentTime], ofItemAtPath: claudeUsage.path)
+
+        let tracker = try AIUsageTracker(
+            siteRoot: siteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            now: { currentTime }
+        )
+        try tracker.bootstrap()
+        #expect(tracker.summary().combined.tokens == 150)
+
+        currentTime = isoDate("2026-04-08T18:05:00Z")
+        try writeAIUsageFixture(codexUsage, #"{"daily":[{"date":"Apr 08, 2026","totalTokens":120}],"totals":{"totalTokens":120,"costUSD":1.0}}"#)
+        try writeAIUsageFixture(claudeUsage, #"{"daily":[{"date":"2026-04-08","totalTokens":80}],"totals":{"totalTokens":80,"totalCost":2.0}}"#)
+        try FileManager.default.setAttributes([.modificationDate: currentTime], ofItemAtPath: codexUsage.path)
+        try FileManager.default.setAttributes([.modificationDate: currentTime], ofItemAtPath: claudeUsage.path)
+
+        try tracker.tick()
+        #expect(tracker.summary().combined.tokens == 200)
+        #expect(tracker.summary().combined.todayTokens == 200)
+    }
+
     @Test
     func bootstrapLoadsCodexAndClaudeTotals() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -172,6 +275,76 @@ struct AIUsageTrackerTests {
         #expect(summary.codex.tokens == 60)
         #expect(summary.combined.tokens == 60)
         #expect(summary.lastMinuteAverageTokensPerSecond > 0)
+    }
+
+    @Test
+    func snapshotlessBootstrapScansFullHistoryForTotals() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let emptySiteRoot = root.appendingPathComponent("empty-site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+
+        let oldCodexSession = codexRoot.appendingPathComponent("2026/01/07/session.jsonl")
+        let oldClaudeSession = claudeRoot.appendingPathComponent("project/claude.jsonl")
+        try writeAIUsageFixture(oldCodexSession, """
+        {"timestamp":"2026-01-07T17:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":90,"cached_input_tokens":5,"output_tokens":3,"reasoning_output_tokens":2,"total_tokens":100}}}}
+        """)
+        try writeAIUsageFixture(oldClaudeSession, """
+        {"timestamp":"2026-01-07T17:00:10Z","message":{"model":"claude-opus-4-6","usage":{"input_tokens":7,"output_tokens":8,"cache_creation_input_tokens":9,"cache_read_input_tokens":6}}}
+        """)
+
+        let now = isoDate("2026-04-08T17:00:00Z")
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: oldCodexSession.path)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: oldClaudeSession.path)
+
+        let tracker = try AIUsageTracker(
+            siteRoot: emptySiteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            supersetSessionLogRoot: root.appendingPathComponent("superset", isDirectory: true),
+            now: { now }
+        )
+        try tracker.bootstrap()
+        let summary = tracker.summary()
+
+        #expect(summary.codex.tokens == 100)
+        #expect(summary.claude.tokens == 30)
+        #expect(summary.combined.tokens == 130)
+    }
+
+    @Test
+    func directSnapshotFileOverridesTakePrecedence() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let siteRoot = root.appendingPathComponent("site", isDirectory: true)
+        let codexRoot = root.appendingPathComponent("codex", isDirectory: true)
+        let claudeRoot = root.appendingPathComponent("claude", isDirectory: true)
+        let overrideCodex = root.appendingPathComponent("override/codex-usage.json")
+        let overrideClaude = root.appendingPathComponent("override/claude-usage.json")
+
+        try writeAIUsageFixture(siteRoot.appendingPathComponent("usage-data/codex-usage.json"), #"{"daily":[],"totals":{"totalTokens":10,"costUSD":0}}"#)
+        try writeAIUsageFixture(siteRoot.appendingPathComponent("usage-data/claude-usage.json"), #"{"daily":[],"totals":{"totalTokens":20,"totalCost":0}}"#)
+        try writeAIUsageFixture(overrideCodex, #"{"daily":[],"totals":{"totalTokens":111,"costUSD":0}}"#)
+        try writeAIUsageFixture(overrideClaude, #"{"daily":[],"totals":{"totalTokens":222,"totalCost":0}}"#)
+
+        setenv("WORKTIMER_CODEX_USAGE_JSON", overrideCodex.path, 1)
+        setenv("WORKTIMER_CLAUDE_USAGE_JSON", overrideClaude.path, 1)
+        defer {
+            unsetenv("WORKTIMER_CODEX_USAGE_JSON")
+            unsetenv("WORKTIMER_CLAUDE_USAGE_JSON")
+        }
+
+        let tracker = try AIUsageTracker(
+            siteRoot: siteRoot,
+            codexRoot: codexRoot,
+            claudeRoot: claudeRoot,
+            now: { isoDate("2026-04-08T17:00:00Z") }
+        )
+        try tracker.bootstrap()
+        let summary = tracker.summary()
+
+        #expect(summary.codex.tokens == 111)
+        #expect(summary.claude.tokens == 222)
+        #expect(summary.combined.tokens == 333)
     }
 
     @Test

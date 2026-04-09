@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="WorkTimer"
-APP_DIR="$HOME/Applications/${APP_NAME}.app"
+APP_PARENT_DIR="${WORKTIMER_INSTALL_DIR:-$HOME/Applications}"
+APP_DIR="$APP_PARENT_DIR/${APP_NAME}.app"
 DIST_DIR="$ROOT_DIR/dist"
 ZIP_PATH="$DIST_DIR/${APP_NAME}-macOS.zip"
 NOTES_PATH="$DIST_DIR/README-SEND-TO-FRIENDS.txt"

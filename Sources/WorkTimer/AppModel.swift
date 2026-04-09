@@ -676,6 +676,66 @@ final class AppModel {
         !dismissedOnboarding || !isInstalledInApplications || needsTypingPermissions || launchAtLoginStatus != .enabled
     }
 
+    private var onboardingCompletedStepCount: Int {
+        onboardingChecklist.filter(\.complete).count
+    }
+
+    var onboardingProgressText: String {
+        "\(onboardingCompletedStepCount)/\(onboardingChecklist.count) done"
+    }
+
+    var onboardingHeadline: String {
+        if !isInstalledInApplications {
+            return "Move WorkTimer into Applications first"
+        }
+        if needsTypingPermissions {
+            return "Turn on typing and mouse permissions"
+        }
+        if launchAtLoginStatus != .enabled {
+            return "Finish launch-at-login approval"
+        }
+        return "Setup complete"
+    }
+
+    var onboardingDescription: String {
+        if !isInstalledInApplications {
+            return "macOS privacy permissions are much more stable when WorkTimer runs from Applications."
+        }
+        if needsTypingPermissions {
+            return "Grant both Accessibility and Input Monitoring so typing time and mouse stats can start immediately."
+        }
+        if launchAtLoginStatus != .enabled {
+            return "WorkTimer already asked macOS to launch at login. If the system wants approval, finish it in Login Items."
+        }
+        return "Core setup is done. You can hide this card any time."
+    }
+
+    var onboardingPrimaryActionTitle: String {
+        if !isInstalledInApplications {
+            return "Show App + Applications"
+        }
+        if needsTypingPermissions {
+            return "Grant Access"
+        }
+        if launchAtLoginStatus != .enabled {
+            return "Enable Login Item"
+        }
+        return "Hide Setup"
+    }
+
+    var onboardingSecondaryActionTitle: String? {
+        if !isInstalledInApplications {
+            return "Open Applications"
+        }
+        if needsTypingPermissions {
+            return "Open Settings"
+        }
+        if launchAtLoginStatus != .enabled {
+            return "Open Login Items"
+        }
+        return nil
+    }
+
     var onboardingStatusLabel: String {
         if !isInstalledInApplications {
             return "Needs Setup"
@@ -925,6 +985,10 @@ final class AppModel {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
     }
 
+    func revealCurrentAppInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+    }
+
     func openSystemSettings() {
         let targetURL: URL
         switch typingPermissionState {
@@ -942,6 +1006,45 @@ final class AppModel {
     func openLoginItemsSettings() {
         let loginItemsURL = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!
         NSWorkspace.shared.open(loginItemsURL)
+    }
+
+    func enableLaunchAtLogin() {
+        LaunchAtLoginManager.ensureEnabled()
+        refreshLaunchAtLoginStatus()
+        if launchAtLoginStatus != .enabled {
+            openLoginItemsSettings()
+        }
+    }
+
+    func performPrimaryOnboardingAction() {
+        if !isInstalledInApplications {
+            revealCurrentAppInFinder()
+            openApplicationsFolder()
+            return
+        }
+        if needsTypingPermissions {
+            requestTypingPermissions()
+            return
+        }
+        if launchAtLoginStatus != .enabled {
+            enableLaunchAtLogin()
+            return
+        }
+        dismissOnboarding()
+    }
+
+    func performSecondaryOnboardingAction() {
+        if !isInstalledInApplications {
+            openApplicationsFolder()
+            return
+        }
+        if needsTypingPermissions {
+            openSystemSettings()
+            return
+        }
+        if launchAtLoginStatus != .enabled {
+            openLoginItemsSettings()
+        }
     }
 
     func dismissOnboarding() {
@@ -1028,7 +1131,7 @@ final class AppModel {
     }
 
     private var shouldAutoOpenOnLaunch: Bool {
-        !dismissedOnboarding
+        shouldShowOnboardingCard
     }
 
     private func refreshLaunchAtLoginStatus() {
