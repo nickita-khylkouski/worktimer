@@ -30,6 +30,24 @@ If you are just receiving `WorkTimer.app` or `WorkTimer-macOS.zip`, do this:
 
 If the menu bar item is missing, check the hidden section in Ice/Bartender first.
 
+## Easiest Install
+
+If you already have Node installed on macOS, the fastest install is:
+
+```bash
+npx worktimer
+```
+
+That downloads the matching signed `WorkTimer.app` from GitHub releases, installs it into `~/Applications`, and opens it.
+
+Useful commands:
+
+```bash
+npx worktimer open
+npx worktimer doctor
+npx worktimer install --app-dir=/Applications
+```
+
 ## Requirements
 
 - macOS 14 or newer

@@ -1,0 +1,31 @@
+{
+  "name": "worktimer",
+  "version": "0.2.0",
+  "description": "CLI installer for the WorkTimer macOS menu bar app",
+  "type": "module",
+  "bin": {
+    "worktimer": "./bin/worktimer.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "keywords": [
+    "macos",
+    "menu-bar",
+    "timer",
+    "productivity"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nickita-khylkouski/worktimer.git"
+  },
+  "homepage": "https://github.com/nickita-khylkouski/worktimer#readme",
+  "bugs": {
+    "url": "https://github.com/nickita-khylkouski/worktimer/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
